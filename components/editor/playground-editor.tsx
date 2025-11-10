@@ -11,20 +11,91 @@ type PlaygroundEditorProps = {
   onChange?: (payload: { markdown: string; blocks: string[] }) => void
 }
 
+const splitMarkdownBlocks = (markdown: string): string[] => {
+  const lines = markdown.split('\n')
+  const blocks: string[] = []
+  let buffer: string[] = []
+  let insideAgent = false
+
+  const flush = () => {
+    if (!buffer.length) {
+      return
+    }
+
+    let result = buffer.join('\n')
+    if (!insideAgent) {
+      result = result.replace(/\n+$/g, '')
+    }
+
+    if (result.trim().length) {
+      blocks.push(result)
+    }
+
+    buffer = []
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+
+    if (!insideAgent && trimmed === ':::') {
+      flush()
+      insideAgent = true
+      buffer.push(':::')
+      continue
+    }
+
+    if (insideAgent) {
+      buffer.push(trimmed === ':::' ? ':::' : line)
+      if (trimmed === ':::') {
+        insideAgent = false
+        flush()
+      }
+      continue
+    }
+
+    buffer.push(line)
+    if (trimmed === '') {
+      flush()
+    }
+  }
+
+  flush()
+  return blocks
+}
+
 const starterBlocks = [
+  `::: 
+@define[Wallet](3NAseqQ76ATx6E9iG8EztpGS1ofgt3URvGSZf965XLeA)
+
+@tool[SolanaRPC](endpoint: {RPC_URL})
+**Description:** Perform RPC calls to fetch program state.
+
+@ai[RiskSummarizer](prompt: "Explain risks for {Wallet}", tool: [SolanaRPC])
+**Description:** Summarize risk posture using SolanaRPC data.
+
+@ai[PersonaClassifier](prompt: "Classify {Wallet} persona", tool: [SolanaRPC])
+**Description:** Predict persona labels for downstream flows.
+
+@tool[x402](price: "$0.25", resource: "/playgrounds/my-agent")
+**Description:** Gate premium insights via x402.
+
+:::`,
   '# Title',
   '## Problem',
   'Describe the pain point your agent solves.',
   '## Workflow',
   '1. Step one\n2. Step two',
   '## AI Behaviors',
-  '~ai[Summarizer]("Explain risks for {Wallet}")\n~ai[Summarizer]("Balance of {Wallet}")\n\n~ai[IntentClassifier]("""\nPick a persona for {Wallet}:\n- INVESTOR\n- DEX_USER\n- NFT_WHALE\n""")',
+  'Operating on wallet **{Wallet}**\n\n~ai[RiskSummarizer]("Explain risks for {Wallet}")\n~ai[RiskSummarizer]("Balance of {Wallet}")\n\n~ai[PersonaClassifier]("""\nPick a persona for {Wallet}:\n- INVESTOR\n- DEX_USER\n- NFT_WHALE\n""")',
+  '## Support Agent Q&A',
+  '~ai[QAResponder]("Answer questions about the wallet state")',
   '## Monetization',
   'Explain what x402 unlocks for paying users.',
 ]
 
 const aiSingleRegex = /~ai\[(.+?)\]\("([^"]+)"\)/g
 const aiTripleRegex = /~ai\[(.+?)\]\("""([\s\S]*?)"""\)/g
+const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
 type AiCall = {
   key: string
@@ -32,39 +103,140 @@ type AiCall = {
   prompt: string
 }
 
-const extractAiCalls = (block: string, index: number): AiCall[] => {
+type AgentDefinition = {
+  kind: string
+  name: string
+  params: string
+  description?: string
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const substituteDefinitions = (text: string, definitions: AgentDefinition[]) =>
+  definitions.reduce((acc, definition) => {
+    if (definition.kind.toLowerCase() !== 'define') {
+      return acc
+    }
+    const replacement = definition.params.trim() || definition.name
+    return acc.replace(new RegExp(`\\{${escapeRegExp(definition.name)}\\}`, 'g'), replacement)
+  }, text)
+
+const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
+  const match = agentDefineRegex.exec(block.trim())
+  if (!match) {
+    return null
+  }
+
+  const inner = match[1]
+  const lines = inner.split('\n')
+  const definitions: AgentDefinition[] = []
+
+  let i = 0
+  while (i < lines.length) {
+    let line = lines[i]?.trim()
+    if (!line) {
+      i += 1
+      continue
+    }
+
+    if (!line.startsWith('@')) {
+      i += 1
+      continue
+    }
+
+    const headerMatch = line.match(/^@([^\[]+)\[([^\]]+)\]\(([^)]*)\)/)
+    if (!headerMatch) {
+      i += 1
+      continue
+    }
+
+    const [, kindRaw, nameRaw, paramsRaw] = headerMatch
+    let description = ''
+
+    i += 1
+    while (i < lines.length) {
+      const nextLine = lines[i]
+      if (!nextLine || nextLine.trim().startsWith('@')) {
+        break
+      }
+      description += `${nextLine.trim()} `
+      i += 1
+    }
+
+    description = description.replace(/\*\*Description:\*\*\s*/i, '').trim()
+
+    definitions.push({
+      kind: kindRaw.trim(),
+      name: nameRaw.trim(),
+      params: paramsRaw.trim(),
+      description: description.length ? description : undefined,
+    })
+  }
+
+  return definitions
+}
+
+const extractAiCalls = (block: string, index: number, definitions: AgentDefinition[]): AiCall[] => {
   const calls: AiCall[] = []
+
+  if (parseAgentDefinitionBlock(block)) {
+    return calls
+  }
 
   const singleMatches = [...block.matchAll(aiSingleRegex)]
   singleMatches.forEach(match => {
     const [, agent, prompt] = match
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+
     calls.push({
       key: `${index}:${agent}:${prompt}`,
       agent: agent.trim(),
-      prompt,
+      prompt: promptWithDefinitions,
     })
   })
 
   const tripleMatches = [...block.matchAll(aiTripleRegex)]
   tripleMatches.forEach(match => {
     const [, agent, prompt] = match
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+
     calls.push({
       key: `${index}:${agent}:${prompt}`,
       agent: agent.trim(),
-      prompt,
+      prompt: promptWithDefinitions,
     })
   })
 
   return calls
 }
 
-const replaceAiCalls = (block: string, index: number, previews: Record<string, string>) => {
-  const replaceSingle = block.replace(aiSingleRegex, (_, agent: string, prompt: string) => {
+const replaceAiCalls = (
+  block: string,
+  index: number,
+  previews: Record<string, string>,
+  definitions: AgentDefinition[],
+) => {
+  if (parseAgentDefinitionBlock(block)) {
+    return ''
+  }
+
+  const substituteBlock = substituteDefinitions(block, definitions)
+
+  const replaceSingle = substituteBlock.replace(aiSingleRegex, (_, agent: string, prompt: string) => {
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+
     const key = `${index}:${agent}:${prompt}`
+    const output = previews[key] ?? `🤖 ${agent.trim()} is thinking…`
+    const match = output.match(/🤖 [^:]+: (.*)/)
+    if (match) {
+      return `🤖 ${agent.trim()}: ${match[1]}`
+    }
     return previews[key] ?? `🤖 ${agent.trim()} is thinking…`
   })
 
   const replaceTriple = replaceSingle.replace(aiTripleRegex, (_, agent: string, prompt: string) => {
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+
     const key = `${index}:${agent}:${prompt}`
     return previews[key] ?? `🤖 ${agent.trim()} is thinking…`
   })
@@ -74,7 +246,23 @@ const replaceAiCalls = (block: string, index: number, previews: Record<string, s
 
 export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) => {
   const [markdown, setMarkdown] = useState(initial?.markdown ?? starterBlocks.join('\n\n'))
-  const blockList = useMemo(() => markdown.split('\n\n'), [markdown])
+  const blockList = useMemo(() => splitMarkdownBlocks(markdown), [markdown])
+  const agentDefinitions = useMemo(() => {
+    const definitions = blockList
+      .map(block => parseAgentDefinitionBlock(block))
+      .filter((def): def is AgentDefinition[] => Boolean(def))
+      .flat()
+    return definitions
+  }, [blockList])
+  const blockEntries = useMemo(() => {
+    const entries: { block: string; index: number }[] = []
+    blockList.forEach((block, index) => {
+      if (!parseAgentDefinitionBlock(block)) {
+        entries.push({ block, index })
+      }
+    })
+    return entries
+  }, [blockList])
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [previewMap, setPreviewMap] = useState<Record<string, string>>({})
   const previewRef = useRef<Record<string, string>>({})
@@ -105,7 +293,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
   const handleMarkdownChange = useCallback(
     (value: string) => {
       setMarkdown(value)
-      onChange?.({ markdown: value, blocks: value.split('\n\n') })
+      onChange?.({ markdown: value, blocks: splitMarkdownBlocks(value) })
     },
     [onChange],
   )
@@ -117,7 +305,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
       const pending: AiCall[] = []
 
       blockList.forEach((block, index) => {
-        extractAiCalls(block, index).forEach(call => {
+        extractAiCalls(block, index, agentDefinitions).forEach(call => {
           if (!previewRef.current[call.key]) {
             pending.push(call)
           }
@@ -173,7 +361,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
     return () => {
       cancelled = true
     }
-  }, [blockList])
+  }, [agentDefinitions, blockList])
 
   return (
     <section className="surface-panel flex flex-col gap-4 p-6 lg:p-8">
@@ -189,7 +377,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
         <div className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold uppercase tracking-[0.35em] text-neutral-400">Blocks</h3>
           <ul className="space-y-3">
-            {blockList.map((block, index) => (
+            {blockEntries.map(({ block, index }) => (
               <li
                 key={`${block}-${index}`}
                 draggable
@@ -224,7 +412,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                       } satisfies Components
                     }
                   >
-                    {replaceAiCalls(block, index, previewMap)}
+                    {replaceAiCalls(block, index, previewMap, agentDefinitions)}
                   </ReactMarkdown>
                 </div>
               </li>
