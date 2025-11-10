@@ -70,27 +70,32 @@ const starterBlocks = [
 @tool[SolanaRPC](endpoint: {RPC_URL})
 **Description:** Perform RPC calls to fetch program state.
 
-@ai[RiskSummarizer](prompt: "Explain risks for {Wallet}", tool: [SolanaRPC])
-**Description:** Summarize risk posture using SolanaRPC data.
-
-@ai[PersonaClassifier](prompt: "Classify {Wallet} persona", tool: [SolanaRPC])
-**Description:** Predict persona labels for downstream flows.
+@ai[BalanceSummarizer](model: "gpt-4o-mini", tool: [SolanaRPC])
+**Description:** Summarize risks and opportunities across holdings.
 
 @tool[x402](price: "$0.25", resource: "/playgrounds/my-agent")
 **Description:** Gate premium insights via x402.
 
 :::`,
-  '# Title',
-  '## Problem',
-  'Describe the pain point your agent solves.',
-  '## Workflow',
-  '1. Step one\n2. Step two',
-  '## AI Behaviors',
-  'Operating on wallet **{Wallet}**\n\n~ai[RiskSummarizer]("Explain risks for {Wallet}")\n~ai[RiskSummarizer]("Balance of {Wallet}")\n\n~ai[PersonaClassifier]("""\nPick a persona for {Wallet}:\n- INVESTOR\n- DEX_USER\n- NFT_WHALE\n""")',
-  '## Support Agent Q&A',
-  '~ai[QAResponder]("Answer questions about the wallet state")',
-  '## Monetization',
-  'Explain what x402 unlocks for paying users.',
+  '# Portfolio Copilot',
+  '> A markdown-native agent that reads on-chain data, builds reports, and suggests next actions.',
+  '## 🧠 Capabilities',
+  '- @arg[Wallet]:String (Primary wallet to analyze)',
+  '- @tool[SolanaRPC](endpoint: {RPC_URL}, caching: true)',
+  '- @ai[BalanceSummarizer](model: "gpt-4o-mini", tool: [SolanaRPC])',
+  `## 🛠️ Workflow
+1. Fetch balances for {Wallet}
+2. Group positions by protocol
+3. Generate recommendations via ~ai[BalanceSummarizer]("Summarize risks and opportunities")
+
+~ai[BalanceSummarizer]("""
+Summarize risks and opportunities for wallet {Wallet}.
+Include:
+- At-risk positions
+- Suggested rebalancing moves
+- Notable protocol exposure
+""")`,
+  '## 🧾 Paywall',
 ]
 
 const aiSingleRegex = /~ai\[(.+?)\]\("([^"]+)"\)/g
@@ -117,9 +122,27 @@ const substituteDefinitions = (text: string, definitions: AgentDefinition[]) =>
     if (definition.kind.toLowerCase() !== 'define') {
       return acc
     }
+
     const replacement = definition.params.trim() || definition.name
     return acc.replace(new RegExp(`\\{${escapeRegExp(definition.name)}\\}`, 'g'), replacement)
   }, text)
+
+const samplePreviewForAgent = (agent: string, prompt: string, definitions: AgentDefinition[]) => {
+  const wallet = definitions.find(def => def.kind.toLowerCase() === 'define' && def.name === 'Wallet')?.params.trim()
+
+  switch (agent.trim().toLowerCase()) {
+    case 'balancesummarizer':
+      return `🤖 BalanceSummarizer: Wallet ${wallet ?? '{Wallet}'} holds 4.2 SOL across 3 protocols. Recommend shifting 0.5 SOL from high-volatility NFT staking into stable yield vaults to reduce downside risk.`
+    case 'risk summarizer':
+    case 'risksummarizer':
+      return `🤖 ${agent.trim()}: Elevated risk detected due to concentrated LP position. Suggest hedging exposure and monitoring margin levels.`
+    case 'qa responder':
+    case 'qaresponder':
+      return `🤖 ${agent.trim()}: Ask about balances, recent transactions, or protocol health and I will respond instantly.`
+    default:
+      return `🤖 ${agent.trim()}: ${prompt}`
+  }
+}
 
 const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
   const match = agentDefineRegex.exec(block.trim())
@@ -231,14 +254,14 @@ const replaceAiCalls = (
     if (match) {
       return `🤖 ${agent.trim()}: ${match[1]}`
     }
-    return previews[key] ?? `🤖 ${agent.trim()} is thinking…`
+    return previews[key] ?? samplePreviewForAgent(agent, promptWithDefinitions, definitions)
   })
 
   const replaceTriple = replaceSingle.replace(aiTripleRegex, (_, agent: string, prompt: string) => {
     const promptWithDefinitions = substituteDefinitions(prompt, definitions)
 
     const key = `${index}:${agent}:${prompt}`
-    return previews[key] ?? `🤖 ${agent.trim()} is thinking…`
+    return previews[key] ?? samplePreviewForAgent(agent, promptWithDefinitions, definitions)
   })
 
   return replaceTriple
