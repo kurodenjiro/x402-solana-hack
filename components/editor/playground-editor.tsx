@@ -1,6 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { PlaygroundPayload } from '@/lib/playgrounds'
 
 type PlaygroundEditorProps = {
@@ -195,9 +198,35 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                 onDrop={() => handleBlockDrop(index)}
                 className="cursor-move rounded-xl border border-dashed border-violet-500/40 bg-violet-500/5 px-3 py-3 text-sm text-neutral-200 transition hover:border-violet-400/60"
               >
-                <pre className="whitespace-pre-wrap font-mono text-xs text-neutral-200">
-                  {replaceAiCalls(block, index, previewMap)}
-                </pre>
+                <div className="prose prose-invert max-w-none prose-headings:text-white prose-p:text-neutral-200 prose-strong:text-white prose-li:text-neutral-200">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={
+                      {
+                        code({ inline, children, ...props }: any) {
+                          if (inline) {
+                            return (
+                              <code className="font-mono text-xs text-violet-200" {...props}>
+                                {children}
+                              </code>
+                            )
+                          }
+
+                          return (
+                            <code
+                              className="block whitespace-pre-wrap rounded-md bg-black/40 p-3 font-mono text-xs text-neutral-100"
+                              {...props}
+                            >
+                              {children}
+                            </code>
+                          )
+                        },
+                      } satisfies Components
+                    }
+                  >
+                    {replaceAiCalls(block, index, previewMap)}
+                  </ReactMarkdown>
+                </div>
               </li>
             ))}
           </ul>
