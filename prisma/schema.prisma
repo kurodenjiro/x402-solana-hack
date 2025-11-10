@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Playground {
+  id               String   @id @default(cuid())
+  slug             String   @unique
+  title            String
+  summary          String
+  markdown         String
+  tags             String[]
+  price            String?
+  network          String   @default("solana-devnet")
+  resourcePath     String   @unique
+  publisherAddress String?
+  status           PlaygroundStatus @default(DRAFT)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+enum PlaygroundStatus {
+  DRAFT
+  PUBLISHED
+}
+
