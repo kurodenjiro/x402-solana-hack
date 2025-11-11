@@ -67,45 +67,50 @@ const starterBlocks = [
   `::: 
 @define[Wallet](3NAseqQ76ATx6E9iG8EztpGS1ofgt3URvGSZf965XLeA)
 
-@tool[SolanaRPC](endpoint: {RPC_URL})
-**Description:** Perform RPC calls to fetch program state.
+@mcp[SolanaMCP]("https://mcp.solana.com/mcp")
+**Description:** Solana MCP service for protocol metadata, pricing, and account enrichment.
 
-@ai[BalanceSummarizer](model: "gpt-4o-mini", tool: [SolanaRPC])
+@tool[SolanaBalanceTool](address: String)
+**Description:** get solana balance wallet
+
+@ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])
 **Description:** Summarize risks and opportunities across holdings.
-
-@tool[x402](price: "$0.25", resource: "/playgrounds/my-agent")
-**Description:** Gate premium insights via x402.
 
 :::`,
   '# Portfolio Copilot',
   '> A markdown-native agent that reads on-chain data, builds reports, and suggests next actions.',
   '## 🧠 Capabilities',
   '- @arg[Wallet]:String (Primary wallet to analyze)',
-  '- @tool[SolanaRPC](endpoint: {RPC_URL}, caching: true)',
-  '- @ai[BalanceSummarizer](model: "gpt-4o-mini", tool: [SolanaRPC])',
+  '- @ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])',
+  '- @mcp[SolanaMCP]("https://mcp.solana.com/mcp")',
   `## 🛠️ Workflow
 1. Fetch balances for {Wallet}
 2. Group positions by protocol
-3. Generate recommendations via ~ai[BalanceSummarizer]("Summarize risks and opportunities")
+3. Generate recommendations via 
 
-~ai[BalanceSummarizer]("""
+~ai[BalanceSummarizer]("
 Summarize risks and opportunities for wallet {Wallet}.
 Include:
 - At-risk positions
 - Suggested rebalancing moves
 - Notable protocol exposure
-""")`,
+")`,
   '## 🧾 Paywall',
 ]
 
-const aiSingleRegex = /~ai\[(.+?)\]\("([^"]+)"\)/g
-const aiTripleRegex = /~ai\[(.+?)\]\("""([\s\S]*?)"""\)/g
+const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
+const aiMultilineRegex = /~ai\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
 const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
 type AiCall = {
   key: string
   agent: string
   prompt: string
+  signature?: string
+  tool?: {
+    name: string
+    params: string
+  }
 }
 
 type AgentDefinition = {
@@ -113,6 +118,7 @@ type AgentDefinition = {
   name: string
   params: string
   description?: string
+  tool?: string
 }
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -127,22 +133,8 @@ const substituteDefinitions = (text: string, definitions: AgentDefinition[]) =>
     return acc.replace(new RegExp(`\\{${escapeRegExp(definition.name)}\\}`, 'g'), replacement)
   }, text)
 
-const samplePreviewForAgent = (agent: string, prompt: string, definitions: AgentDefinition[]) => {
-  const wallet = definitions.find(def => def.kind.toLowerCase() === 'define' && def.name === 'Wallet')?.params.trim()
-
-  switch (agent.trim().toLowerCase()) {
-    case 'balancesummarizer':
-      return `🤖 BalanceSummarizer: Wallet ${wallet ?? '{Wallet}'} holds 4.2 SOL across 3 protocols. Recommend shifting 0.5 SOL from high-volatility NFT staking into stable yield vaults to reduce downside risk.`
-    case 'risk summarizer':
-    case 'risksummarizer':
-      return `🤖 ${agent.trim()}: Elevated risk detected due to concentrated LP position. Suggest hedging exposure and monitoring margin levels.`
-    case 'qa responder':
-    case 'qaresponder':
-      return `🤖 ${agent.trim()}: Ask about balances, recent transactions, or protocol health and I will respond instantly.`
-    default:
-      return `🤖 ${agent.trim()}: ${prompt}`
-  }
-}
+const samplePreviewForAgent = (agent: string) => `🤖 ${agent.trim()}: thinking…`
+const normalizePrompt = (prompt: string) => prompt.replace(/\r\n/g, '\n').trim()
 
 const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
   const match = agentDefineRegex.exec(block.trim())
@@ -175,6 +167,12 @@ const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
 
     const [, kindRaw, nameRaw, paramsRaw] = headerMatch
     let description = ''
+    let toolRef: string | undefined
+
+    const inlineToolMatch = paramsRaw.match(/tool\s*:\s*\[([^\]]+)\]/i)
+    if (inlineToolMatch) {
+      toolRef = inlineToolMatch[1].trim()
+    }
 
     i += 1
     while (i < lines.length) {
@@ -182,6 +180,17 @@ const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
       if (!nextLine || nextLine.trim().startsWith('@')) {
         break
       }
+
+      const trimmed = nextLine.trim()
+      if (!toolRef) {
+        const toolMatch = trimmed.match(/^tool\s*:\s*\[([^\]]+)\]/i)
+        if (toolMatch) {
+          toolRef = toolMatch[1].trim()
+          i += 1
+          continue
+        }
+      }
+
       description += `${nextLine.trim()} `
       i += 1
     }
@@ -193,6 +202,7 @@ const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
       name: nameRaw.trim(),
       params: paramsRaw.trim(),
       description: description.length ? description : undefined,
+      tool: toolRef,
     })
   }
 
@@ -210,23 +220,51 @@ const extractAiCalls = (block: string, index: number, definitions: AgentDefiniti
   singleMatches.forEach(match => {
     const [, agent, prompt] = match
     const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptKey = normalizePrompt(prompt)
+    const aiDefinition = definitions.find(
+      def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
+    )
+    const toolDefinition = aiDefinition?.tool
+      ? definitions.find(def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase())
+      : undefined
 
     calls.push({
-      key: `${index}:${agent}:${prompt}`,
+      key: `${index}:${agent}:${promptKey}`,
       agent: agent.trim(),
       prompt: promptWithDefinitions,
+      signature: aiDefinition?.params,
+      tool: toolDefinition
+        ? {
+            name: toolDefinition.name,
+            params: toolDefinition.params,
+          }
+        : undefined,
     })
   })
 
-  const tripleMatches = [...block.matchAll(aiTripleRegex)]
-  tripleMatches.forEach(match => {
+  const multilineMatches = [...block.matchAll(aiMultilineRegex)]
+  multilineMatches.forEach(match => {
     const [, agent, prompt] = match
     const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptKey = normalizePrompt(prompt)
+    const aiDefinition = definitions.find(
+      def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
+    )
+    const toolDefinition = aiDefinition?.tool
+      ? definitions.find(def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase())
+      : undefined
 
     calls.push({
-      key: `${index}:${agent}:${prompt}`,
+      key: `${index}:${agent}:${promptKey}`,
       agent: agent.trim(),
       prompt: promptWithDefinitions,
+      signature: aiDefinition?.params,
+      tool: toolDefinition
+        ? {
+            name: toolDefinition.name,
+            params: toolDefinition.params,
+          }
+        : undefined,
     })
   })
 
@@ -243,28 +281,36 @@ const replaceAiCalls = (
     return ''
   }
 
-  const substituteBlock = substituteDefinitions(block, definitions)
+  let processedBlock = block
 
-  const replaceSingle = substituteBlock.replace(aiSingleRegex, (_, agent: string, prompt: string) => {
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
-
-    const key = `${index}:${agent}:${prompt}`
-    const output = previews[key] ?? `🤖 ${agent.trim()} is thinking…`
-    const match = output.match(/🤖 [^:]+: (.*)/)
-    if (match) {
-      return `🤖 ${agent.trim()}: ${match[1]}`
+  const formatResponse = (agent: string, response: string) => {
+    const trimmedAgent = agent.trim()
+    if (response.startsWith(`🤖 ${trimmedAgent}:`)) {
+      const content = response.slice(response.indexOf(':') + 1).trimStart()
+      return `🤖 ${trimmedAgent}:\n\n${content}`
     }
-    return previews[key] ?? samplePreviewForAgent(agent, promptWithDefinitions, definitions)
+    if (response.startsWith(`${trimmedAgent}:`)) {
+      const content = response.slice(response.indexOf(':') + 1).trimStart()
+      return `🤖 ${trimmedAgent}:\n\n${content}`
+    }
+    return response
+  }
+
+  processedBlock = processedBlock.replace(aiSingleRegex, (_, agent: string, prompt: string) => {
+    const promptKey = normalizePrompt(prompt)
+    const key = `${index}:${agent}:${promptKey}`
+    const output = previews[key] ?? samplePreviewForAgent(agent)
+    return formatResponse(agent, output)
   })
 
-  const replaceTriple = replaceSingle.replace(aiTripleRegex, (_, agent: string, prompt: string) => {
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
-
-    const key = `${index}:${agent}:${prompt}`
-    return previews[key] ?? samplePreviewForAgent(agent, promptWithDefinitions, definitions)
+  processedBlock = processedBlock.replace(aiMultilineRegex, (_, agent: string, prompt: string) => {
+    const promptKey = normalizePrompt(prompt)
+    const key = `${index}:${agent}:${promptKey}`
+    const output = previews[key] ?? samplePreviewForAgent(agent)
+    return formatResponse(agent, output)
   })
 
-  return replaceTriple
+  return substituteDefinitions(processedBlock, definitions)
 }
 
 export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) => {
@@ -277,6 +323,10 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
       .flat()
     return definitions
   }, [blockList])
+  const mcpDefinitions = useMemo(
+    () => agentDefinitions.filter(def => def.kind.toLowerCase() === 'mcp'),
+    [agentDefinitions],
+  )
   const blockEntries = useMemo(() => {
     const entries: { block: string; index: number }[] = []
     blockList.forEach((block, index) => {
@@ -289,6 +339,11 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [previewMap, setPreviewMap] = useState<Record<string, string>>({})
   const previewRef = useRef<Record<string, string>>({})
+
+  const resetPreviews = useCallback(() => {
+    previewRef.current = {}
+    setPreviewMap({})
+  }, [])
 
   const handleBlockDragStart = useCallback((index: number) => {
     setDragIndex(index)
@@ -305,20 +360,22 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
       const [removed] = nextBlocks.splice(dragIndex, 1)
       nextBlocks.splice(index, 0, removed)
 
+      resetPreviews()
       const nextMarkdown = nextBlocks.join('\n\n')
       setMarkdown(nextMarkdown)
       setDragIndex(null)
       onChange?.({ markdown: nextMarkdown, blocks: nextBlocks })
     },
-    [dragIndex, blockList, onChange],
+    [dragIndex, blockList, onChange, resetPreviews],
   )
 
   const handleMarkdownChange = useCallback(
     (value: string) => {
+      resetPreviews()
       setMarkdown(value)
       onChange?.({ markdown: value, blocks: splitMarkdownBlocks(value) })
     },
-    [onChange],
+    [onChange, resetPreviews],
   )
 
   useEffect(() => {
@@ -330,6 +387,9 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
       blockList.forEach((block, index) => {
         extractAiCalls(block, index, agentDefinitions).forEach(call => {
           if (!previewRef.current[call.key]) {
+            const placeholder = samplePreviewForAgent(call.agent)
+            previewRef.current[call.key] = placeholder
+            setPreviewMap(prev => ({ ...prev, [call.key]: placeholder }))
             pending.push(call)
           }
         })
@@ -341,6 +401,14 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
 
       for (const call of pending) {
         try {
+          const config =
+            call.signature || call.tool
+              ? {
+                  signature: call.signature,
+                  tool: call.tool,
+                }
+              : undefined
+
           const response = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -348,6 +416,10 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
               type: 'text',
               bot: call.agent,
               prompt: call.prompt,
+              ...(config ? { config } : {}),
+              ...(mcpDefinitions.length
+                ? { mcp: mcpDefinitions.map(definition => ({ name: definition.name, params: definition.params })) }
+                : {}),
             }),
           })
 
