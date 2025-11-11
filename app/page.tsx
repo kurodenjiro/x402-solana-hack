@@ -75,47 +75,33 @@ export default async function Home() {
       </div>
 
       <section className="mx-auto flex w-full max-w-6xl flex-col gap-24 px-6 pb-32 pt-20 sm:px-8 lg:px-12">
-        <header className="surface-panel p-12 lg:p-16">
-          <div className="grid gap-12 lg:grid-cols-[1.4f  r_1fr] lg:items-start">
-            <div className="space-y-8">
-              <span className="inline-flex items-center rounded-full border border-white/10 bg-white/10 px-4 py-1 text-xs font-semibold uppercase tracking-[0.4em] text-neutral-200">
-                Inspired by agents.md
-              </span>
-              <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl">
-                Launch AI-native playgrounds directly from Markdown.
-              </h1>
-              <p className="max-w-2xl text-lg text-neutral-300">
-                Author agent workflows with Web3 Markdown, monetize premium steps with x402 Solana payments, and let
-                viewers run everything without leaving the page.
-              </p>
-              <div className="flex flex-wrap items-center gap-4">
-                <Link
-                  href="/workspace"
-                  className="inline-flex items-center justify-center rounded-full bg-white px-5 py-3 text-sm font-semibold text-neutral-900 transition hover:bg-white/90"
-                >
-                  Open workspace
-                </Link>
-                <Link
-                  href="#playgrounds"
-                  className="inline-flex items-center justify-center rounded-full border border-white/20 px-5 py-3 text-sm font-semibold text-neutral-100 transition hover:border-white hover:text-white"
-                >
-                  Explore feed
-                </Link>
-              </div>
-            </div>
-            <div className="rounded-[2rem] border border-white/10 bg-black/40 p-6 shadow-[0_0_80px_-30px_rgba(124,58,237,0.75)]">
-              <div className="mb-4 flex items-center justify-between text-xs text-neutral-500">
-                <span>agents.md</span>
-                <span>markdown</span>
-              </div>
-              <pre className="overflow-x-auto whitespace-pre-wrap rounded-xl border border-white/5 bg-neutral-950/70 p-5 font-mono text-xs leading-relaxed text-violet-100">
-                {heroSnippet}
-              </pre>
+        <section className="surface-panel p-12 lg:p-16">
+          <div className="space-y-8">
+            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl">
+              Launch AI-native playgrounds directly from Markdown.
+            </h1>
+            <p className="max-w-2xl text-lg text-neutral-300">
+              Author agent workflows with Web3 Markdown, monetize premium steps with x402 Solana payments, and let
+              viewers run everything without leaving the page.
+            </p>
+            <div className="flex flex-wrap items-center gap-4">
+              <Link
+                href="/workspace"
+                className="inline-flex items-center justify-center rounded-full bg-white px-5 py-3 text-sm font-semibold text-neutral-900 transition hover:bg-white/90"
+              >
+                Open workspace
+              </Link>
+              <Link
+                href="#playgrounds"
+                className="inline-flex items-center justify-center rounded-full border border-white/20 px-5 py-3 text-sm font-semibold text-neutral-100 transition hover:border-white hover:text-white"
+              >
+                Explore feed
+              </Link>
             </div>
           </div>
-        </header>
+        </section>
 
-        <section className=" p-10 lg:p-14">
+        <section className="surface-panel p-10 lg:p-14">
           <dl className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
             {heroCallouts.map(callout => (
               <div

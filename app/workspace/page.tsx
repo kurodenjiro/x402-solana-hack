@@ -10,27 +10,11 @@ import { PlaygroundEditor } from '@/components/editor/playground-editor'
 import { ConnectWalletButton } from '@/components/connect-wallet-button'
 
 type DraftPayload = {
-  title: string
-  summary: string
-  slug: string
-  price?: string
-  tags: string
   markdown: string
-  publisherAddress?: string
-  network: 'solana' | 'solana-devnet'
-  status: 'DRAFT' | 'PUBLISHED'
 }
 
 const initialDraft: DraftPayload = {
-  title: '',
-  summary: '',
-  slug: '',
-  price: '',
-  tags: '',
   markdown: '',
-  publisherAddress: '',
-  network: 'solana-devnet',
-  status: 'DRAFT',
 }
 
 export default function WorkspacePage() {
@@ -50,15 +34,17 @@ export default function WorkspacePage() {
     setError(null)
     setSuccess(null)
 
+    if (!draft.markdown.trim()) {
+      setSaving(false)
+      setError('Add some Markdown content before publishing.')
+      return
+    }
+
     try {
       const response = await fetch('/api/playgrounds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...draft,
-          tags: draft.tags.split(',').map(tag => tag.trim()).filter(Boolean),
-          price: draft.price?.length ? draft.price : undefined,
-        }),
+        body: JSON.stringify({ markdown: draft.markdown }),
       })
 
       if (!response.ok) {
@@ -129,91 +115,12 @@ export default function WorkspacePage() {
 
       {!gated && (
         <>
-          <section className="grid gap-6 rounded-3xl border border-white/10 bg-white/[0.03] p-6 lg:grid-cols-2">
-            <div className="flex flex-col gap-4">
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Title</span>
-                <input
-                  value={draft.title}
-                  onChange={event => setDraft(prev => ({ ...prev, title: event.target.value }))}
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Summary</span>
-                <textarea
-                  value={draft.summary}
-                  onChange={event => setDraft(prev => ({ ...prev, summary: event.target.value }))}
-                  rows={4}
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                />
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Slug</span>
-                <input
-                  value={draft.slug}
-                  onChange={event => setDraft(prev => ({ ...prev, slug: event.target.value.replace(/\s+/g, '-') }))}
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                />
-                <span className="text-xs text-neutral-500">Example: portfolio-copilot</span>
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Price (optional)</span>
-                <input
-                  value={draft.price}
-                  onChange={event => setDraft(prev => ({ ...prev, price: event.target.value }))}
-                  placeholder="$0.20"
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                />
-              </label>
-            </div>
-            <div className="flex flex-col gap-4">
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Tags</span>
-                <input
-                  value={draft.tags}
-                  onChange={event => setDraft(prev => ({ ...prev, tags: event.target.value }))}
-                  placeholder="agents, defi, analytics"
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                />
-                <span className="text-xs text-neutral-500">Comma separated</span>
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Network</span>
-                <select
-                  value={draft.network}
-                  onChange={event =>
-                    setDraft(prev => ({ ...prev, network: event.target.value as DraftPayload['network'] }))
-                  }
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                >
-                  <option value="solana-devnet">solana-devnet</option>
-                  <option value="solana">solana (mainnet)</option>
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Status</span>
-                <select
-                  value={draft.status}
-                  onChange={event =>
-                    setDraft(prev => ({ ...prev, status: event.target.value as DraftPayload['status'] }))
-                  }
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                >
-                  <option value="DRAFT">Draft</option>
-                  <option value="PUBLISHED">Published</option>
-                </select>
-              </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-300">Publisher wallet (optional)</span>
-                <input
-                  value={draft.publisherAddress ?? ''}
-                  onChange={event => setDraft(prev => ({ ...prev, publisherAddress: event.target.value }))}
-                  placeholder="Wallet address for payouts"
-                  className="rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-neutral-100 outline-none transition focus:border-violet-500"
-                />
-              </label>
-            </div>
+          <section className="surface-panel flex flex-col gap-3 p-6">
+            <h2 className="text-xl font-semibold text-white">Markdown playground</h2>
+            <p className="text-sm text-neutral-400">
+              Draft your agent workflow in pure Markdown. Titles, summaries, and metadata are now auto-generated from
+              the content you write here.
+            </p>
           </section>
 
           <PlaygroundEditor initial={{ markdown: draft.markdown }} onChange={handleEditorChange} />
