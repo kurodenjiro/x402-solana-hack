@@ -4,7 +4,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import type { PlaygroundPayload } from '@/lib/playgrounds'
+
+type IntentState = {
+  status: 'idle' | 'loading' | 'success' | 'error'
+  response?: string
+  error?: string
+}
+
+type IntentTriggerPayload = {
+  key: string
+  agent: string
+  prompt: string
+}
 
 type PlaygroundEditorProps = {
   initial?: Partial<PlaygroundPayload>
@@ -63,6 +76,52 @@ const splitMarkdownBlocks = (markdown: string): string[] => {
   return blocks
 }
 
+const idleIntentState: IntentState = { status: 'idle' }
+
+type IntentPreviewProps = {
+  agent: string
+  prompt: string
+  displayPrompt: string
+  intentKey: string
+  state: IntentState
+  onTrigger: (payload: IntentTriggerPayload) => void
+}
+
+const IntentPreview = ({ agent, prompt, displayPrompt, intentKey, state, onTrigger }: IntentPreviewProps) => {
+  const handleClick = () => {
+    if (state.status === 'loading') {
+      return
+    }
+    onTrigger({ key: intentKey, agent, prompt })
+  }
+
+  return (
+    <div className="mt-3 flex flex-col gap-3 rounded-xl border border-white/15 bg-black/30 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-white">{agent}</span>
+        <button
+          type="button"
+          onClick={handleClick}
+          disabled={state.status === 'loading'}
+          className="inline-flex items-center gap-2 rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-100 transition hover:border-violet-400 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {state.status === 'loading' ? 'Running…' : 'Run intent'}
+        </button>
+      </div>
+      <p className="text-xs text-neutral-400 whitespace-pre-wrap">{displayPrompt}</p>
+      {state.status === 'loading' ? <p className="text-xs text-neutral-400">Generating response…</p> : null}
+      {state.status === 'error' && state.error ? <p className="text-xs text-rose-400">{state.error}</p> : null}
+      {state.status === 'success' && state.response ? (
+        <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-sm text-neutral-200">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+            {state.response}
+          </ReactMarkdown>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 const starterBlocks = [
   `::: 
 @define[Wallet](3NAseqQ76ATx6E9iG8EztpGS1ofgt3URvGSZf965XLeA)
@@ -95,11 +154,13 @@ Include:
 - Suggested rebalancing moves
 - Notable protocol exposure
 ")`,
+  `~intent[BalanceSummarizer]("Summarize only the most at-risk positions for {Wallet} in one sentence.")`,
   '## 🧾 Paywall',
 ]
 
 const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
 const aiMultilineRegex = /~ai\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
+const intentRegex = /~intent\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
 const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
 type AiCall = {
@@ -135,6 +196,41 @@ const substituteDefinitions = (text: string, definitions: AgentDefinition[]) =>
 
 const samplePreviewForAgent = (agent: string) => `🤖 ${agent.trim()}: thinking…`
 const normalizePrompt = (prompt: string) => prompt.replace(/\r\n/g, '\n').trim()
+const escapeAttribute = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+const encodeDataAttribute = (value: string) => escapeAttribute(encodeURIComponent(value))
+const decodeDataAttribute = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return ''
+  }
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return ''
+  }
+}
+
+const getDataAttribute = (props: any, name: string) => {
+  if (!props) {
+    return undefined
+  }
+  const direct = props[name]
+  if (direct !== undefined) {
+    return Array.isArray(direct) ? direct[0] : direct
+  }
+  const nodeProps = props?.node?.properties
+  if (nodeProps && nodeProps[name] !== undefined) {
+    const value = nodeProps[name]
+    return Array.isArray(value) ? value[0] : value
+  }
+  return undefined
+}
 
 const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
   const match = agentDefineRegex.exec(block.trim())
@@ -284,30 +380,37 @@ const replaceAiCalls = (
   let processedBlock = block
 
   const formatResponse = (agent: string, response: string) => {
-    const trimmedAgent = agent.trim()
-    if (response.startsWith(`🤖 ${trimmedAgent}:`)) {
+    if (response.startsWith(`🤖 ${agent.trim()}:`)) {
       const content = response.slice(response.indexOf(':') + 1).trimStart()
-      return `🤖 ${trimmedAgent}:\n\n${content}`
-    }
-    if (response.startsWith(`${trimmedAgent}:`)) {
-      const content = response.slice(response.indexOf(':') + 1).trimStart()
-      return `🤖 ${trimmedAgent}:\n\n${content}`
+      return `### ${agent.trim()}\n\n${content}`
     }
     return response
   }
 
   processedBlock = processedBlock.replace(aiSingleRegex, (_, agent: string, prompt: string) => {
-    const promptKey = normalizePrompt(prompt)
-    const key = `${index}:${agent}:${promptKey}`
+    const key = `${index}:${agent}:${normalizePrompt(prompt)}`
     const output = previews[key] ?? samplePreviewForAgent(agent)
     return formatResponse(agent, output)
   })
 
   processedBlock = processedBlock.replace(aiMultilineRegex, (_, agent: string, prompt: string) => {
-    const promptKey = normalizePrompt(prompt)
-    const key = `${index}:${agent}:${promptKey}`
+    const key = `${index}:${agent}:${normalizePrompt(prompt)}`
     const output = previews[key] ?? samplePreviewForAgent(agent)
     return formatResponse(agent, output)
+  })
+
+  processedBlock = processedBlock.replace(intentRegex, (_, agent: string, prompt: string) => {
+    const normalizedAgent = agent.trim()
+    const promptKey = normalizePrompt(prompt)
+    const key = `${index}:${normalizedAgent}:${promptKey}`
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+
+    const keyAttr = encodeDataAttribute(key)
+    const agentAttr = encodeDataAttribute(normalizedAgent)
+    const rawPromptAttr = encodeDataAttribute(prompt)
+    const renderedPromptAttr = encodeDataAttribute(promptWithDefinitions)
+
+    return `\n<intent-button data-key="${keyAttr}" data-agent="${agentAttr}" data-prompt="${rawPromptAttr}" data-rendered="${renderedPromptAttr}"></intent-button>\n`
   })
 
   return substituteDefinitions(processedBlock, definitions)
@@ -339,11 +442,87 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
   const [dragIndex, setDragIndex] = useState<number | null>(null)
   const [previewMap, setPreviewMap] = useState<Record<string, string>>({})
   const previewRef = useRef<Record<string, string>>({})
+  const [intentStates, setIntentStates] = useState<Record<string, IntentState>>({})
 
   const resetPreviews = useCallback(() => {
     previewRef.current = {}
     setPreviewMap({})
+    setIntentStates({})
   }, [])
+
+  const handleIntentTrigger = useCallback(
+    async ({ key, agent, prompt }: IntentTriggerPayload) => {
+      const aiDefinition = agentDefinitions.find(
+        def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
+      )
+      const toolDefinition = aiDefinition?.tool
+        ? agentDefinitions.find(
+            def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase(),
+          )
+        : undefined
+
+      const config =
+        aiDefinition || toolDefinition
+          ? {
+              signature: aiDefinition?.params,
+              tool: toolDefinition
+                ? {
+                    name: toolDefinition.name,
+                    params: toolDefinition.params,
+                  }
+                : undefined,
+            }
+          : undefined
+
+      const promptWithDefinitions = substituteDefinitions(prompt, agentDefinitions)
+
+      setIntentStates(prev => ({
+        ...prev,
+        [key]: { status: 'loading' },
+      }))
+
+      try {
+        const response = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'text',
+            bot: agent,
+            prompt: promptWithDefinitions,
+            ...(config ? { config } : {}),
+            ...(mcpDefinitions.length
+              ? { mcp: mcpDefinitions.map(definition => ({ name: definition.name, params: definition.params })) }
+              : {}),
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`)
+        }
+
+        const payload: { content?: string } = await response.json()
+        const content = payload.content?.trim() ?? ''
+
+        setIntentStates(prev => ({
+          ...prev,
+          [key]: {
+            status: content.length ? 'success' : 'error',
+            response: content.length ? content : undefined,
+            error: content.length ? undefined : 'No response content',
+          },
+        }))
+      } catch (error) {
+        setIntentStates(prev => ({
+          ...prev,
+          [key]: {
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Failed to run intent.',
+          },
+        }))
+      }
+    },
+    [agentDefinitions, mcpDefinitions],
+  )
 
   const handleBlockDragStart = useCallback((index: number) => {
     setDragIndex(index)
@@ -484,6 +663,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                 <div className="prose prose-invert max-w-none prose-headings:text-white prose-p:text-neutral-200 prose-strong:text-white prose-li:text-neutral-200">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeRaw]}
                     components={
                       {
                         code({ inline, children, ...props }: any) {
@@ -504,7 +684,44 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                             </code>
                           )
                         },
-                      } satisfies Components
+                        p({ node, children, ...props }: any) {
+                          const hasIntentButton = Array.isArray(node?.children)
+                            ? node.children.some((child: any) => child?.tagName === 'intent-button')
+                            : false
+                          if (hasIntentButton) {
+                            const { className, ...rest } = props
+                            return (
+                              <div {...rest} className={className}>
+                                {children}
+                              </div>
+                            )
+                          }
+                          return (
+                            <p {...props}>
+                              {children}
+                            </p>
+                          )
+                        },
+                        ['intent-button']: (props: any) => {
+                          const keyAttr = decodeDataAttribute(getDataAttribute(props, 'data-key'))
+                          const agentAttr = decodeDataAttribute(getDataAttribute(props, 'data-agent')) || 'Intent'
+                          const rawPromptAttr = decodeDataAttribute(getDataAttribute(props, 'data-prompt'))
+                          const renderedPromptAttr = decodeDataAttribute(getDataAttribute(props, 'data-rendered')) || rawPromptAttr
+                          const state = intentStates[keyAttr] ?? idleIntentState
+
+                          return (
+                            <IntentPreview
+                              key={keyAttr}
+                              agent={agentAttr}
+                              prompt={rawPromptAttr}
+                              displayPrompt={renderedPromptAttr}
+                              intentKey={keyAttr}
+                              state={state}
+                              onTrigger={handleIntentTrigger}
+                            />
+                          )
+                        },
+                      } as Components
                     }
                   >
                     {replaceAiCalls(block, index, previewMap, agentDefinitions)}

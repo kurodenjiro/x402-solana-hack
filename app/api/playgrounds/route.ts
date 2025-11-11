@@ -108,6 +108,15 @@ export async function POST(req: Request) {
     },
   })
 
+  const desiredResourcePath = `/playgrounds/${record.id}`
+  if (record.resourcePath !== desiredResourcePath) {
+    const updated = await prisma.playground.update({
+      where: { id: record.id },
+      data: { resourcePath: desiredResourcePath },
+    })
+    return NextResponse.json(updated, { status: 201 })
+  }
+
   return NextResponse.json(record, { status: 201 })
 }
 

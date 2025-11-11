@@ -22,7 +22,7 @@ export const PlaygroundCard = ({ playground }: PlaygroundCardProps) => {
       </div>
       <footer className="flex items-center justify-between border-t border-white/10 pt-4">
         <Link
-          href={playground.resourcePath}
+          href={playground.resourcePath ?? `/playgrounds/${playground.id}`}
           className="inline-flex items-center gap-1 text-sm font-semibold text-violet-200 transition hover:text-violet-100"
         >
           Open playground ↗
