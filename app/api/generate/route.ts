@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { generateText, experimental_generateImage as generateImage, type ToolSet } from 'ai'
+import { generateText, experimental_generateImage as generateImage, experimental_generateSpeech as generateSpeech, type ToolSet } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { experimental_createMCPClient } from '@ai-sdk/mcp'
 
@@ -9,7 +9,7 @@ type ToolConfig = {
 }
 
 type GenerateRequest = {
-  type?: 'text' | 'image'
+  type?: 'text' | 'image' | 'speech'
   bot?: string
   prompt?: string
   config?: {
@@ -109,6 +109,46 @@ export async function POST(request: Request) {
       } catch (error) {
         console.error('Image generation failed', error)
         const errorMessage = error instanceof Error ? error.message : 'Failed to generate image.'
+        return NextResponse.json({ error: errorMessage }, { status: 500 })
+      }
+    }
+
+    // Handle speech generation
+    if (type === 'speech') {
+      try {
+        const result = await generateSpeech({
+          model: openai.speech('tts-1'),
+          text: prompt,
+          voice: 'alloy',
+        })
+
+        const audio = result.audio
+        if (audio && audio.base64) {
+          // Convert to base64 data URL
+          // Map format to MIME type
+          const format = audio.format || 'mp3'
+          const mimeTypeMap: Record<string, string> = {
+            mp3: 'audio/mpeg',
+            wav: 'audio/wav',
+            ogg: 'audio/ogg',
+            m4a: 'audio/mp4',
+          }
+          const mediaType = mimeTypeMap[format.toLowerCase()] || 'audio/mpeg'
+          const dataUrl = `data:${mediaType};base64,${audio.base64}`
+
+          // Validate the data URL is complete
+          if (dataUrl.length < 100) {
+            console.error('Generated audio data URL is too short', { length: dataUrl.length })
+            return NextResponse.json({ error: 'Generated audio data is incomplete.' }, { status: 500 })
+          }
+
+          return NextResponse.json({ audio: dataUrl })
+        }
+
+        return NextResponse.json({ error: 'No audio generated.' }, { status: 500 })
+      } catch (error) {
+        console.error('Speech generation failed', error)
+        const errorMessage = error instanceof Error ? error.message : 'Failed to generate speech.'
         return NextResponse.json({ error: errorMessage }, { status: 500 })
       }
     }

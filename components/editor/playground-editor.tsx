@@ -122,6 +122,43 @@ const ImagePreview = ({ imageKey, agent, imageData }: ImagePreviewProps) => {
   )
 }
 
+type AudioPreviewProps = {
+  audioKey: string
+  agent: string
+  audioData?: string
+}
+
+const AudioPreview = ({ audioKey, agent, audioData }: AudioPreviewProps) => {
+  if (audioData && typeof audioData === 'string' && audioData.startsWith('data:audio') && audioData.length > 100) {
+    // Extract MIME type from data URL
+    const mimeTypeMatch = audioData.match(/^data:([^;]+)/)
+    const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'audio/mpeg'
+    
+    return (
+      <div className="my-3">
+        <audio controls className="w-full rounded-lg border border-white/10">
+          <source src={audioData} type={mimeType} />
+          Your browser does not support the audio element.
+        </audio>
+      </div>
+    )
+  }
+  
+  if (audioData && audioData.startsWith('⚠️')) {
+    return (
+      <div className="my-3 text-sm text-rose-400">
+        {audioData}
+      </div>
+    )
+  }
+  
+  return (
+    <div className="my-3 text-sm text-neutral-400">
+      🎤 <strong>{agent}</strong>: generating speech...
+    </div>
+  )
+}
+
 const IntentPreview = ({ agent, prompt, displayPrompt, buttonText, intentKey, state, onTrigger }: IntentPreviewProps) => {
   const handleClick = () => {
     if (state.status === 'loading') {
@@ -213,11 +250,13 @@ Include:
 ")`,
   `~intent[BalanceSummarizer](<Summarize risks>,Summarize only the most at-risk positions for {Wallet} in one sentence.)`,
   `~ai-image[ImageGenerator]("A futuristic Solana blockchain visualization with neon colors")`,
+  `~ai-speech[VoiceGenerator]("Welcome to the AI-native playground. This is a demonstration of text-to-speech generation.")`,
 ]
 
 const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
 const aiMultilineRegex = /~ai\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
 const aiImageRegex = /~ai-image\[(.+?)\]\("([^"]+)"\)/g
+const aiSpeechRegex = /~ai-speech\[(.+?)\]\("([^"]+)"\)/g
 const intentRegex = /~intent\[(.+?)\]\(<([^>]+)>,\s*([\s\S]*?)\)/g
 const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
@@ -231,6 +270,7 @@ type AiCall = {
     params: string
   }
   isImage?: boolean
+  isSpeech?: boolean
 }
 
 type AgentDefinition = {
@@ -437,6 +477,20 @@ const extractAiCalls = (block: string, index: number, definitions: AgentDefiniti
     })
   })
 
+  const speechMatches = [...block.matchAll(aiSpeechRegex)]
+  speechMatches.forEach(match => {
+    const [, agent, prompt] = match
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptKey = normalizePrompt(prompt)
+
+    calls.push({
+      key: `speech:${index}:${agent}:${promptKey}`,
+      agent: agent.trim(),
+      prompt: promptWithDefinitions,
+      isSpeech: true,
+    })
+  })
+
   return calls
 }
 
@@ -480,6 +534,16 @@ const replaceAiCalls = (
     const agentAttr = encodeDataAttribute(agent.trim())
     const imageDataAttr = output ? encodeDataAttribute(output) : ''
     return `\n<ai-image data-key="${keyAttr}" data-agent="${agentAttr}" data-image="${imageDataAttr}"></ai-image>\n`
+  })
+
+  processedBlock = processedBlock.replace(aiSpeechRegex, (_, agent: string, prompt: string) => {
+    const key = `speech:${index}:${agent}:${normalizePrompt(prompt)}`
+    const output = previews[key]
+    // Use custom HTML element that will be replaced with React component
+    const keyAttr = encodeDataAttribute(key)
+    const agentAttr = encodeDataAttribute(agent.trim())
+    const audioDataAttr = output ? encodeDataAttribute(output) : ''
+    return `\n<ai-speech data-key="${keyAttr}" data-agent="${agentAttr}" data-audio="${audioDataAttr}"></ai-speech>\n`
   })
 
   processedBlock = processedBlock.replace(intentRegex, (_, agent: string, buttonText: string, prompt: string) => {
@@ -634,7 +698,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
         p({ node, children, ...props }: any) {
           const hasCustomElement = Array.isArray(node?.children)
             ? node.children.some((child: any) => 
-                child?.tagName === 'intent-button' || child?.tagName === 'ai-image'
+                child?.tagName === 'intent-button' || child?.tagName === 'ai-image' || child?.tagName === 'ai-speech'
               )
             : false
           if (hasCustomElement) {
@@ -664,6 +728,22 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
               imageKey={keyAttr}
               agent={agentAttr}
               imageData={imageData}
+            />
+          )
+        },
+        ['ai-speech']: (props: any) => {
+          const keyAttr = decodeDataAttribute(getDataAttribute(props, 'data-key'))
+          const agentAttr = decodeDataAttribute(getDataAttribute(props, 'data-agent')) || 'SpeechGenerator'
+          const audioDataAttr = decodeDataAttribute(getDataAttribute(props, 'data-audio'))
+          // Get the latest audio data from previewMap
+          const audioData = previewMap[keyAttr] || audioDataAttr
+
+          return (
+            <AudioPreview
+              key={keyAttr}
+              audioKey={keyAttr}
+              agent={agentAttr}
+              audioData={audioData}
             />
           )
         },
@@ -807,6 +887,52 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
               } else {
                 const errorMsg = payload.error || 'No image data received'
                 console.error(`Image generation failed for ${call.key}:`, errorMsg, { hasImage: !!imageData, type: typeof imageData, preview: imageData?.substring(0, 50) })
+                setPreviewMap(prev => {
+                  const next = { ...prev, [call.key]: `⚠️ ${call.agent}: ${errorMsg}` }
+                  previewRef.current = next
+                  return next
+                })
+              }
+            }
+          } else if (call.isSpeech) {
+            const response = await fetch('/api/generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                type: 'speech',
+                bot: call.agent,
+                prompt: call.prompt,
+              }),
+            })
+
+            if (!response.ok) {
+              throw new Error(`Request failed with status ${response.status}`)
+            }
+
+            const payload: { audio?: string; error?: string } = await response.json()
+            const audioData = payload.audio
+
+            if (!cancelled) {
+              if (audioData && typeof audioData === 'string' && audioData.startsWith('data:audio')) {
+                // Validate the data URL is complete
+                if (audioData.length > 100) {
+                  console.log(`Speech generated successfully for ${call.key}, length: ${audioData.length}`)
+                  setPreviewMap(prev => {
+                    const next = { ...prev, [call.key]: audioData }
+                    previewRef.current = next
+                    return next
+                  })
+                } else {
+                  console.warn(`Audio data URL too short for ${call.key}: ${audioData.length} chars`)
+                  setPreviewMap(prev => {
+                    const next = { ...prev, [call.key]: `⚠️ ${call.agent}: invalid audio data` }
+                    previewRef.current = next
+                    return next
+                  })
+                }
+              } else {
+                const errorMsg = payload.error || 'No audio data received'
+                console.error(`Speech generation failed for ${call.key}:`, errorMsg, { hasAudio: !!audioData, type: typeof audioData, preview: audioData?.substring(0, 50) })
                 setPreviewMap(prev => {
                   const next = { ...prev, [call.key]: `⚠️ ${call.agent}: ${errorMsg}` }
                   previewRef.current = next
