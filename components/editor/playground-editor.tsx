@@ -162,12 +162,13 @@ const AudioPreview = ({ audioKey, agent, audioData }: AudioPreviewProps) => {
 type DefineInputProps = {
   defineKey: string
   name: string
+  label: string
   defaultValue: string
   currentValue: string
   onChange: (key: string, value: string) => void
 }
 
-const DefineInput = ({ defineKey, name, defaultValue, currentValue, onChange }: DefineInputProps) => {
+const DefineInput = ({ defineKey, name, label, defaultValue, currentValue, onChange }: DefineInputProps) => {
   const [localValue, setLocalValue] = useState(currentValue)
 
   // Update local value when currentValue prop changes
@@ -194,7 +195,7 @@ const DefineInput = ({ defineKey, name, defaultValue, currentValue, onChange }: 
   return (
     <div className="my-3 flex flex-col gap-2">
       <label className="text-sm font-semibold text-neutral-300">
-        {name}
+        {label}
       </label>
       <input
         type="text"
@@ -202,7 +203,7 @@ const DefineInput = ({ defineKey, name, defaultValue, currentValue, onChange }: 
         onChange={handleChange}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
-        placeholder={defaultValue}
+        placeholder={defaultValue || `Enter ${name}`}
         className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-2 font-mono text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-violet-400 focus:outline-none"
       />
     </div>
@@ -299,7 +300,7 @@ Include:
 - Notable protocol exposure
 ")`,
   `~intent[BalanceSummarizer](<Summarize risks>,Summarize only the most at-risk positions for {Wallet} in one sentence.)`,
-  `~define[Wallet]("3NAseqQ76ATx6E9iG8EztpGS1ofgt3URvGSZf965XLeA")`,
+  `~define[Wallet](Wallet Address)`,
   `~ai-image[ImageGenerator]("A futuristic Solana blockchain visualization with neon colors")`,
   `~ai-speech[VoiceGenerator]("Welcome to the AI-native playground. This is a demonstration of text-to-speech generation.")`,
 ]
@@ -308,7 +309,7 @@ const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
 const aiMultilineRegex = /~ai\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
 const aiImageRegex = /~ai-image\[(.+?)\]\("([^"]+)"\)/g
 const aiSpeechRegex = /~ai-speech\[(.+?)\]\("([^"]+)"\)/g
-const defineRegex = /~define\[(.+?)\]\("([^"]+)"\)/g
+const defineRegex = /~define\[(.+?)\]\(([^)]+)\)/g
 const intentRegex = /~intent\[(.+?)\]\(<([^>]+)>,\s*([\s\S]*?)\)/g
 const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
@@ -637,12 +638,19 @@ const replaceAiCalls = (
     return `\n<ai-speech data-key="${keyAttr}" data-agent="${agentAttr}" data-audio="${audioDataAttr}"></ai-speech>\n`
   })
 
-  processedBlock = processedBlock.replace(defineRegex, (_, name: string, defaultValue: string) => {
+  processedBlock = processedBlock.replace(defineRegex, (_, name: string, label: string) => {
     const key = `define:${index}:${name}`
+    // Get default value from agent definitions if available
+    const agentDefine = definitions.find(
+      def => def.kind.toLowerCase() === 'define' && def.name.toLowerCase() === name.trim().toLowerCase()
+    )
+    const defaultValue = agentDefine ? (agentDefine.params.trim() || '') : ''
+    
     const keyAttr = encodeDataAttribute(key)
     const nameAttr = encodeDataAttribute(name.trim())
+    const labelAttr = encodeDataAttribute(label.trim())
     const defaultValueAttr = encodeDataAttribute(defaultValue)
-    return `\n<define-input data-key="${keyAttr}" data-name="${nameAttr}" data-default="${defaultValueAttr}"></define-input>\n`
+    return `\n<define-input data-key="${keyAttr}" data-name="${nameAttr}" data-label="${labelAttr}" data-default="${defaultValueAttr}"></define-input>\n`
   })
 
   processedBlock = processedBlock.replace(intentRegex, (_, agent: string, buttonText: string, prompt: string) => {
@@ -696,23 +704,28 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
 
   // Extract define calls and initialize userDefines
   const defineCalls = useMemo(() => {
-    const defines: Array<{ key: string; name: string; defaultValue: string }> = []
+    const defines: Array<{ key: string; name: string; label: string; defaultValue: string }> = []
     blockList.forEach((block, index) => {
       const matches = [...block.matchAll(defineRegex)]
       matches.forEach(match => {
-        const [, name, defaultValue] = match
+        const [, name, label] = match
         const key = `define:${index}:${name.trim()}`
-        defines.push({ key, name: name.trim(), defaultValue })
+        // Get default value from agent definitions if available
+        const agentDefine = agentDefinitions.find(
+          def => def.kind.toLowerCase() === 'define' && def.name.toLowerCase() === name.trim().toLowerCase()
+        )
+        const defaultValue = agentDefine ? (agentDefine.params.trim() || '') : ''
+        defines.push({ key, name: name.trim(), label: label.trim(), defaultValue })
       })
     })
     return defines
-  }, [blockList])
+  }, [blockList, agentDefinitions])
 
-  // Initialize userDefines with default values
+  // Initialize userDefines with default values from agent definitions
   useEffect(() => {
     const initialDefines: Record<string, string> = {}
     defineCalls.forEach(({ key, defaultValue }) => {
-      if (!(key in userDefines)) {
+      if (!(key in userDefines) && defaultValue) {
         initialDefines[key] = defaultValue
       }
     })
@@ -917,6 +930,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
         ['define-input']: (props: any) => {
           const keyAttr = decodeDataAttribute(getDataAttribute(props, 'data-key'))
           const nameAttr = decodeDataAttribute(getDataAttribute(props, 'data-name')) || 'Variable'
+          const labelAttr = decodeDataAttribute(getDataAttribute(props, 'data-label')) || nameAttr
           const defaultValueAttr = decodeDataAttribute(getDataAttribute(props, 'data-default')) || ''
           const currentValue = userDefines[keyAttr] ?? defaultValueAttr
 
@@ -925,6 +939,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
               key={keyAttr}
               defineKey={keyAttr}
               name={nameAttr}
+              label={labelAttr}
               defaultValue={defaultValueAttr}
               currentValue={currentValue}
               onChange={handleDefineChange}
