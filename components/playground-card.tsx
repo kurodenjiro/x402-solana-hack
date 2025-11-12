@@ -14,9 +14,17 @@ export const PlaygroundCard = ({ playground }: PlaygroundCardProps) => {
   const updatedLabel = playground.updatedAt
     ? new Date(playground.updatedAt as unknown as string | number | Date).toISOString().split('T')[0]
     : ''
+  const walletMatch = playground.markdown.match(/@define\[Wallet\]\(([^)]+)\)/i)
+  const walletAddress = walletMatch?.[1]?.trim().replace(/^['"]|['"]$/g, '')
 
   return (
     <article className="flex flex-col gap-4 rounded-3xl border border-white/10 bg-white/[0.04] p-6 transition hover:border-violet-500/30 hover:bg-white/[0.06]">
+      {walletAddress ? (
+        <div className="flex items-center justify-between text-xs uppercase tracking-[0.35em] text-neutral-500">
+          <span className="font-semibold text-neutral-200">Wallet</span>
+          <span className="font-mono text-[0.65rem] text-violet-200">{walletAddress}</span>
+        </div>
+      ) : null}
       <div className="prose prose-invert max-w-none text-sm text-neutral-200 prose-headings:text-white">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{playground.markdown}</ReactMarkdown>
       </div>

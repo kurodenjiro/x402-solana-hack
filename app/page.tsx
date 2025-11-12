@@ -92,7 +92,7 @@ export default async function Home() {
                 Open workspace
               </Link>
               <Link
-                href="#playgrounds"
+                href="/feed"
                 className="inline-flex items-center justify-center rounded-full border border-white/20 px-5 py-3 text-sm font-semibold text-neutral-100 transition hover:border-white hover:text-white"
               >
                 Explore feed
@@ -204,7 +204,7 @@ export default async function Home() {
               Publish your own
             </Link>
           </header>
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="flex flex-col gap-6">
             {playgrounds.map(playground => (
               <PlaygroundCard key={playground.id} playground={playground} />
             ))}

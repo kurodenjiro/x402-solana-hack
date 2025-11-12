@@ -82,12 +82,13 @@ type IntentPreviewProps = {
   agent: string
   prompt: string
   displayPrompt: string
+  buttonText: string
   intentKey: string
   state: IntentState
   onTrigger: (payload: IntentTriggerPayload) => void
 }
 
-const IntentPreview = ({ agent, prompt, displayPrompt, intentKey, state, onTrigger }: IntentPreviewProps) => {
+const IntentPreview = ({ agent, prompt, displayPrompt, buttonText, intentKey, state, onTrigger }: IntentPreviewProps) => {
   const handleClick = () => {
     if (state.status === 'loading') {
       return
@@ -96,21 +97,18 @@ const IntentPreview = ({ agent, prompt, displayPrompt, intentKey, state, onTrigg
   }
 
   return (
-    <div className="mt-3 flex flex-col gap-3 rounded-xl border border-white/15 bg-black/30 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-white">{agent}</span>
-        <button
-          type="button"
-          onClick={handleClick}
-          disabled={state.status === 'loading'}
-          className="inline-flex items-center gap-2 rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1 text-xs font-semibold text-violet-100 transition hover:border-violet-400 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {state.status === 'loading' ? 'Running…' : 'Run intent'}
-        </button>
-      </div>
-      <p className="text-xs text-neutral-400 whitespace-pre-wrap">{displayPrompt}</p>
-      {state.status === 'loading' ? <p className="text-xs text-neutral-400">Generating response…</p> : null}
-      {state.status === 'error' && state.error ? <p className="text-xs text-rose-400">{state.error}</p> : null}
+    <div className="mt-3 flex flex-col gap-3">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={state.status === 'loading'}
+        className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-violet-500/40 bg-violet-500/10 px-6 py-3 text-sm font-semibold text-violet-100 transition hover:border-violet-400 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {state.status === 'loading' ? 'Running…' : buttonText}
+      </button>
+      {state.status === 'error' && state.error ? (
+        <p className="text-xs text-rose-400">{state.error}</p>
+      ) : null}
       {state.status === 'success' && state.response ? (
         <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-sm text-neutral-200">
           <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
@@ -154,13 +152,13 @@ Include:
 - Suggested rebalancing moves
 - Notable protocol exposure
 ")`,
-  `~intent[BalanceSummarizer]("Summarize only the most at-risk positions for {Wallet} in one sentence.")`,
+  `~intent[BalanceSummarizer](<Summarize risks>,Summarize only the most at-risk positions for {Wallet} in one sentence.)`,
   '## 🧾 Paywall',
 ]
 
 const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
 const aiMultilineRegex = /~ai\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
-const intentRegex = /~intent\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
+const intentRegex = /~intent\[(.+?)\]\(<([^>]+)>,\s*([\s\S]*?)\)/g
 const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
 type AiCall = {
@@ -399,18 +397,21 @@ const replaceAiCalls = (
     return formatResponse(agent, output)
   })
 
-  processedBlock = processedBlock.replace(intentRegex, (_, agent: string, prompt: string) => {
+  processedBlock = processedBlock.replace(intentRegex, (_, agent: string, buttonText: string, prompt: string) => {
     const normalizedAgent = agent.trim()
-    const promptKey = normalizePrompt(prompt)
+    const normalizedButtonText = buttonText.trim()
+    const normalizedPrompt = prompt.trim()
+    const promptKey = normalizePrompt(normalizedPrompt)
     const key = `${index}:${normalizedAgent}:${promptKey}`
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptWithDefinitions = substituteDefinitions(normalizedPrompt, definitions)
 
     const keyAttr = encodeDataAttribute(key)
     const agentAttr = encodeDataAttribute(normalizedAgent)
-    const rawPromptAttr = encodeDataAttribute(prompt)
+    const buttonTextAttr = encodeDataAttribute(normalizedButtonText)
+    const rawPromptAttr = encodeDataAttribute(normalizedPrompt)
     const renderedPromptAttr = encodeDataAttribute(promptWithDefinitions)
 
-    return `\n<intent-button data-key="${keyAttr}" data-agent="${agentAttr}" data-prompt="${rawPromptAttr}" data-rendered="${renderedPromptAttr}"></intent-button>\n`
+    return `\n<intent-button data-key="${keyAttr}" data-agent="${agentAttr}" data-button-text="${buttonTextAttr}" data-prompt="${rawPromptAttr}" data-rendered="${renderedPromptAttr}"></intent-button>\n`
   })
 
   return substituteDefinitions(processedBlock, definitions)
@@ -705,6 +706,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                         ['intent-button']: (props: any) => {
                           const keyAttr = decodeDataAttribute(getDataAttribute(props, 'data-key'))
                           const agentAttr = decodeDataAttribute(getDataAttribute(props, 'data-agent')) || 'Intent'
+                          const buttonTextAttr = decodeDataAttribute(getDataAttribute(props, 'data-button-text')) || 'Run intent'
                           const rawPromptAttr = decodeDataAttribute(getDataAttribute(props, 'data-prompt'))
                           const renderedPromptAttr = decodeDataAttribute(getDataAttribute(props, 'data-rendered')) || rawPromptAttr
                           const state = intentStates[keyAttr] ?? idleIntentState
@@ -715,6 +717,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                               agent={agentAttr}
                               prompt={rawPromptAttr}
                               displayPrompt={renderedPromptAttr}
+                              buttonText={buttonTextAttr}
                               intentKey={keyAttr}
                               state={state}
                               onTrigger={handleIntentTrigger}
