@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { generateText, type ToolSet } from 'ai'
+import { generateText, experimental_generateImage as generateImage, type ToolSet } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { experimental_createMCPClient } from '@ai-sdk/mcp'
 
@@ -9,7 +9,7 @@ type ToolConfig = {
 }
 
 type GenerateRequest = {
-  type?: 'text'
+  type?: 'text' | 'image'
   bot?: string
   prompt?: string
   config?: {
@@ -45,7 +45,7 @@ const extractEndpoint = (params: string) => {
   return match ? match[1] : null
 }
 
-export const runtime = 'edge'
+export const runtime = 'nodejs'
 
 export async function POST(request: Request) {
   const mcpClients: Awaited<ReturnType<typeof experimental_createMCPClient>>[] = []
@@ -58,6 +58,7 @@ export async function POST(request: Request) {
     }
 
     const body = (await request.json()) as GenerateRequest
+    const type = body.type ?? 'text'
     const call = body.calls?.[0]
     const bot = call?.bot ?? body.bot
     const prompt = call?.prompt ?? body.prompt
@@ -70,6 +71,46 @@ export async function POST(request: Request) {
 
     if (!bot || !prompt) {
       return NextResponse.json({ error: 'Both bot and prompt are required.' }, { status: 400 })
+    }
+
+    // Handle image generation
+    if (type === 'image') {
+      try {
+        const result = await generateImage({
+          model: openai.image('dall-e-3'),
+          prompt: prompt,
+          n: 1,
+          size: '1024x1024',
+        })
+
+        const images = result.images
+        if (images && images.length > 0) {
+          const image = images[0]
+          // Convert to base64 data URL
+          // The image object should have base64 property
+          const base64 = image.base64
+          if (!base64) {
+            console.error('Image generated but no base64 data found', { image: Object.keys(image) })
+            return NextResponse.json({ error: 'Image generated but no base64 data available.' }, { status: 500 })
+          }
+          const mediaType = image.mediaType || 'image/png'
+          const dataUrl = `data:${mediaType};base64,${base64}`
+
+          // Validate the data URL is complete
+          if (dataUrl.length < 100) {
+            console.error('Generated data URL is too short', { length: dataUrl.length })
+            return NextResponse.json({ error: 'Generated image data is incomplete.' }, { status: 500 })
+          }
+
+          return NextResponse.json({ image: dataUrl })
+        }
+
+        return NextResponse.json({ error: 'No image generated.' }, { status: 500 })
+      } catch (error) {
+        console.error('Image generation failed', error)
+        const errorMessage = error instanceof Error ? error.message : 'Failed to generate image.'
+        return NextResponse.json({ error: errorMessage }, { status: 500 })
+      }
     }
 
     const toolConfigs: ToolConfig[] = []

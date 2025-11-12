@@ -2,6 +2,7 @@ import path from 'node:path'
 import { readFile } from 'node:fs/promises'
 
 import ReactMarkdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { parseMarkdownFrontMatter } from '@/lib/playgrounds'
@@ -32,7 +33,33 @@ export default async function DocsPage() {
         </header>
 
         <article className="prose prose-invert max-w-none rounded-3xl border border-white/5 bg-white/[0.02] p-10 lg:p-16 prose-headings:font-semibold prose-headings:text-white prose-p:text-neutral-300 prose-a:text-violet-300 prose-a:transition hover:prose-a:text-violet-200 prose-code:text-violet-200 prose-code:bg-black/40 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-black/40 prose-pre:border prose-pre:border-white/10">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              img({ src, alt, ...props }: any) {
+                // Validate src is a non-empty string
+                if (!src || typeof src !== 'string' || src.trim() === '') {
+                  return null
+                }
+                // For data URLs (generated images), ensure they're valid
+                if (src.startsWith('data:image')) {
+                  if (src.length < 100) {
+                    return null
+                  }
+                }
+                return (
+                  <img
+                    src={src}
+                    alt={alt || 'Generated image'}
+                    className="rounded-lg border border-white/10 max-w-full"
+                    {...props}
+                  />
+                )
+              },
+            } as Components}
+          >
+            {content}
+          </ReactMarkdown>
         </article>
       </div>
     </div>
