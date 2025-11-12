@@ -129,7 +129,7 @@ type AudioPreviewProps = {
 }
 
 const AudioPreview = ({ audioKey, agent, audioData }: AudioPreviewProps) => {
-  if (audioData && typeof audioData === 'string' && audioData.startsWith('data:audio') && audioData.length > 100) {
+  if (audioData && typeof audioData === 'string' && (audioData.startsWith('data:audio') || audioData.startsWith('data:audio/')) && audioData.length > 100) {
     // Extract MIME type from data URL
     const mimeTypeMatch = audioData.match(/^data:([^;]+)/)
     const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'audio/mpeg'
@@ -144,7 +144,7 @@ const AudioPreview = ({ audioKey, agent, audioData }: AudioPreviewProps) => {
     )
   }
   
-  if (audioData && audioData.startsWith('⚠️')) {
+  if (audioData && typeof audioData === 'string' && audioData.startsWith('⚠️')) {
     return (
       <div className="my-3 text-sm text-rose-400">
         {audioData}
@@ -155,6 +155,56 @@ const AudioPreview = ({ audioKey, agent, audioData }: AudioPreviewProps) => {
   return (
     <div className="my-3 text-sm text-neutral-400">
       🎤 <strong>{agent}</strong>: generating speech...
+    </div>
+  )
+}
+
+type DefineInputProps = {
+  defineKey: string
+  name: string
+  defaultValue: string
+  currentValue: string
+  onChange: (key: string, value: string) => void
+}
+
+const DefineInput = ({ defineKey, name, defaultValue, currentValue, onChange }: DefineInputProps) => {
+  const [localValue, setLocalValue] = useState(currentValue)
+
+  // Update local value when currentValue prop changes
+  useEffect(() => {
+    setLocalValue(currentValue)
+  }, [currentValue])
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setLocalValue(e.target.value)
+  }
+
+  const handleBlur = () => {
+    if (localValue !== currentValue) {
+      onChange(defineKey, localValue)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur()
+    }
+  }
+
+  return (
+    <div className="my-3 flex flex-col gap-2">
+      <label className="text-sm font-semibold text-neutral-300">
+        {name}
+      </label>
+      <input
+        type="text"
+        value={localValue}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        placeholder={defaultValue}
+        className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-2 font-mono text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-violet-400 focus:outline-none"
+      />
     </div>
   )
 }
@@ -249,6 +299,7 @@ Include:
 - Notable protocol exposure
 ")`,
   `~intent[BalanceSummarizer](<Summarize risks>,Summarize only the most at-risk positions for {Wallet} in one sentence.)`,
+  `~define[Wallet]("3NAseqQ76ATx6E9iG8EztpGS1ofgt3URvGSZf965XLeA")`,
   `~ai-image[ImageGenerator]("A futuristic Solana blockchain visualization with neon colors")`,
   `~ai-speech[VoiceGenerator]("Welcome to the AI-native playground. This is a demonstration of text-to-speech generation.")`,
 ]
@@ -257,6 +308,7 @@ const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
 const aiMultilineRegex = /~ai\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
 const aiImageRegex = /~ai-image\[(.+?)\]\("([^"]+)"\)/g
 const aiSpeechRegex = /~ai-speech\[(.+?)\]\("([^"]+)"\)/g
+const defineRegex = /~define\[(.+?)\]\("([^"]+)"\)/g
 const intentRegex = /~intent\[(.+?)\]\(<([^>]+)>,\s*([\s\S]*?)\)/g
 const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
@@ -283,15 +335,46 @@ type AgentDefinition = {
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const substituteDefinitions = (text: string, definitions: AgentDefinition[]) =>
-  definitions.reduce((acc, definition) => {
+const substituteDefinitions = (
+  text: string,
+  definitions: AgentDefinition[],
+  userDefines?: Record<string, string>,
+  defineNameMap?: Record<string, string>,
+) => {
+  let result = text
+
+  // First, substitute user-defined values (they take priority)
+  if (userDefines && defineNameMap) {
+    result = result.replace(/\{([^}]+)\}/g, (match, varName) => {
+      // Find the define key for this variable name
+      const defineKey = Object.keys(defineNameMap).find(key => defineNameMap[key] === varName)
+      if (defineKey && userDefines[defineKey]) {
+        return userDefines[defineKey]
+      }
+      return match
+    })
+  }
+
+  // Then, substitute agent definitions (only for variables not already replaced)
+  result = definitions.reduce((acc, definition) => {
     if (definition.kind.toLowerCase() !== 'define') {
       return acc
     }
 
-    const replacement = definition.params.trim() || definition.name
-    return acc.replace(new RegExp(`\\{${escapeRegExp(definition.name)}\\}`, 'g'), replacement)
-  }, text)
+    // Only replace if the variable hasn't been replaced by user-defined value
+    const varName = definition.name
+    const hasUserDefine = userDefines && defineNameMap && 
+      Object.keys(defineNameMap).some(key => defineNameMap[key] === varName && userDefines[key])
+    
+    if (!hasUserDefine) {
+      const replacement = definition.params.trim() || definition.name
+      return acc.replace(new RegExp(`\\{${escapeRegExp(definition.name)}\\}`, 'g'), replacement)
+    }
+    return acc
+  }, result)
+
+  return result
+}
 
 const samplePreviewForAgent = (agent: string) => `🤖 ${agent.trim()}: thinking…`
 const normalizePrompt = (prompt: string) => prompt.replace(/\r\n/g, '\n').trim()
@@ -404,7 +487,13 @@ const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
   return definitions
 }
 
-const extractAiCalls = (block: string, index: number, definitions: AgentDefinition[]): AiCall[] => {
+const extractAiCalls = (
+  block: string,
+  index: number,
+  definitions: AgentDefinition[],
+  userDefines?: Record<string, string>,
+  defineNameMap?: Record<string, string>,
+): AiCall[] => {
   const calls: AiCall[] = []
 
   if (parseAgentDefinitionBlock(block)) {
@@ -414,7 +503,7 @@ const extractAiCalls = (block: string, index: number, definitions: AgentDefiniti
   const singleMatches = [...block.matchAll(aiSingleRegex)]
   singleMatches.forEach(match => {
     const [, agent, prompt] = match
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const promptKey = normalizePrompt(prompt)
     const aiDefinition = definitions.find(
       def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
@@ -440,7 +529,7 @@ const extractAiCalls = (block: string, index: number, definitions: AgentDefiniti
   const multilineMatches = [...block.matchAll(aiMultilineRegex)]
   multilineMatches.forEach(match => {
     const [, agent, prompt] = match
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const promptKey = normalizePrompt(prompt)
     const aiDefinition = definitions.find(
       def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
@@ -466,7 +555,7 @@ const extractAiCalls = (block: string, index: number, definitions: AgentDefiniti
   const imageMatches = [...block.matchAll(aiImageRegex)]
   imageMatches.forEach(match => {
     const [, agent, prompt] = match
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const promptKey = normalizePrompt(prompt)
 
     calls.push({
@@ -480,7 +569,7 @@ const extractAiCalls = (block: string, index: number, definitions: AgentDefiniti
   const speechMatches = [...block.matchAll(aiSpeechRegex)]
   speechMatches.forEach(match => {
     const [, agent, prompt] = match
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions)
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const promptKey = normalizePrompt(prompt)
 
     calls.push({
@@ -499,6 +588,8 @@ const replaceAiCalls = (
   index: number,
   previews: Record<string, string>,
   definitions: AgentDefinition[],
+  userDefines?: Record<string, string>,
+  defineNameMap?: Record<string, string>,
 ) => {
   if (parseAgentDefinitionBlock(block)) {
     return ''
@@ -546,13 +637,21 @@ const replaceAiCalls = (
     return `\n<ai-speech data-key="${keyAttr}" data-agent="${agentAttr}" data-audio="${audioDataAttr}"></ai-speech>\n`
   })
 
+  processedBlock = processedBlock.replace(defineRegex, (_, name: string, defaultValue: string) => {
+    const key = `define:${index}:${name}`
+    const keyAttr = encodeDataAttribute(key)
+    const nameAttr = encodeDataAttribute(name.trim())
+    const defaultValueAttr = encodeDataAttribute(defaultValue)
+    return `\n<define-input data-key="${keyAttr}" data-name="${nameAttr}" data-default="${defaultValueAttr}"></define-input>\n`
+  })
+
   processedBlock = processedBlock.replace(intentRegex, (_, agent: string, buttonText: string, prompt: string) => {
     const normalizedAgent = agent.trim()
     const normalizedButtonText = buttonText.trim()
     const normalizedPrompt = prompt.trim()
     const promptKey = normalizePrompt(normalizedPrompt)
     const key = `${index}:${normalizedAgent}:${promptKey}`
-    const promptWithDefinitions = substituteDefinitions(normalizedPrompt, definitions)
+    const promptWithDefinitions = substituteDefinitions(normalizedPrompt, definitions, userDefines, defineNameMap)
 
     const keyAttr = encodeDataAttribute(key)
     const agentAttr = encodeDataAttribute(normalizedAgent)
@@ -563,7 +662,7 @@ const replaceAiCalls = (
     return `\n<intent-button data-key="${keyAttr}" data-agent="${agentAttr}" data-button-text="${buttonTextAttr}" data-prompt="${rawPromptAttr}" data-rendered="${renderedPromptAttr}"></intent-button>\n`
   })
 
-  return substituteDefinitions(processedBlock, definitions)
+  return substituteDefinitions(processedBlock, definitions, userDefines, defineNameMap)
 }
 
 export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) => {
@@ -593,12 +692,112 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
   const [previewMap, setPreviewMap] = useState<Record<string, string>>({})
   const previewRef = useRef<Record<string, string>>({})
   const [intentStates, setIntentStates] = useState<Record<string, IntentState>>({})
+  const [userDefines, setUserDefines] = useState<Record<string, string>>({})
+
+  // Extract define calls and initialize userDefines
+  const defineCalls = useMemo(() => {
+    const defines: Array<{ key: string; name: string; defaultValue: string }> = []
+    blockList.forEach((block, index) => {
+      const matches = [...block.matchAll(defineRegex)]
+      matches.forEach(match => {
+        const [, name, defaultValue] = match
+        const key = `define:${index}:${name.trim()}`
+        defines.push({ key, name: name.trim(), defaultValue })
+      })
+    })
+    return defines
+  }, [blockList])
+
+  // Initialize userDefines with default values
+  useEffect(() => {
+    const initialDefines: Record<string, string> = {}
+    defineCalls.forEach(({ key, defaultValue }) => {
+      if (!(key in userDefines)) {
+        initialDefines[key] = defaultValue
+      }
+    })
+    if (Object.keys(initialDefines).length > 0) {
+      setUserDefines(prev => ({ ...prev, ...initialDefines }))
+    }
+  }, [defineCalls])
 
   const resetPreviews = useCallback(() => {
     previewRef.current = {}
     setPreviewMap({})
     setIntentStates({})
   }, [])
+
+  // Map define keys to variable names for quick lookup
+  const defineNameMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    defineCalls.forEach(({ key, name }) => {
+      map[key] = name
+    })
+    return map
+  }, [defineCalls])
+
+  const handleDefineChange = useCallback((key: string, value: string) => {
+    setUserDefines(prev => {
+      const updated = { ...prev, [key]: value }
+      // Get the variable name for this define key
+      const varName = defineNameMap[key]
+      if (varName) {
+        // Only clear previews that use this variable
+        const varPattern = new RegExp(`\\{${escapeRegExp(varName)}\\}`)
+        setPreviewMap(prevMap => {
+          const newMap: Record<string, string> = {}
+          Object.keys(prevMap).forEach(previewKey => {
+            // Check if this preview's original prompt contains the variable
+            // The preview key format is: "index:agent:promptKey" or "image:index:agent:promptKey" or "speech:index:agent:promptKey"
+            // We need to find the original block and check if the prompt uses this variable
+            let shouldRegenerate = false
+            for (let blockIndex = 0; blockIndex < blockList.length; blockIndex++) {
+              const block = blockList[blockIndex]
+              // Check all AI call patterns
+              const allMatches = [
+                ...block.matchAll(aiSingleRegex),
+                ...block.matchAll(aiMultilineRegex),
+                ...block.matchAll(aiImageRegex),
+                ...block.matchAll(aiSpeechRegex),
+              ]
+              
+              for (const match of allMatches) {
+                const [, agent, prompt] = match
+                const promptKey = normalizePrompt(prompt)
+                // Check if this matches the preview key pattern
+                const possibleKeys = [
+                  `${blockIndex}:${agent.trim()}:${promptKey}`,
+                  `image:${blockIndex}:${agent.trim()}:${promptKey}`,
+                  `speech:${blockIndex}:${agent.trim()}:${promptKey}`,
+                ]
+                
+                if (possibleKeys.includes(previewKey) && varPattern.test(prompt)) {
+                  shouldRegenerate = true
+                  break
+                }
+              }
+              if (shouldRegenerate) break
+            }
+            
+            if (!shouldRegenerate) {
+              newMap[previewKey] = prevMap[previewKey]
+            } else {
+              // Remove from previewRef so it regenerates
+              delete previewRef.current[previewKey]
+            }
+          })
+          previewRef.current = { ...previewRef.current, ...newMap }
+          return newMap
+        })
+      } else {
+        // If we can't find the variable name, clear all previews
+        previewRef.current = {}
+        setPreviewMap({})
+      }
+      setIntentStates({})
+      return updated
+    })
+  }, [defineNameMap, blockList])
 
   const handleIntentTrigger = useCallback(
     async ({ key, agent, prompt }: IntentTriggerPayload) => {
@@ -624,7 +823,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
             }
           : undefined
 
-      const promptWithDefinitions = substituteDefinitions(prompt, agentDefinitions)
+      const promptWithDefinitions = substituteDefinitions(prompt, agentDefinitions, userDefines, defineNameMap)
 
       setIntentStates(prev => ({
         ...prev,
@@ -671,7 +870,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
         }))
       }
     },
-    [agentDefinitions, mcpDefinitions],
+    [agentDefinitions, mcpDefinitions, userDefines],
   )
 
   const markdownComponents = useMemo(
@@ -698,7 +897,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
         p({ node, children, ...props }: any) {
           const hasCustomElement = Array.isArray(node?.children)
             ? node.children.some((child: any) => 
-                child?.tagName === 'intent-button' || child?.tagName === 'ai-image' || child?.tagName === 'ai-speech'
+                child?.tagName === 'intent-button' || child?.tagName === 'ai-image' || child?.tagName === 'ai-speech' || child?.tagName === 'define-input'
               )
             : false
           if (hasCustomElement) {
@@ -715,12 +914,28 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
             </p>
           )
         },
+        ['define-input']: (props: any) => {
+          const keyAttr = decodeDataAttribute(getDataAttribute(props, 'data-key'))
+          const nameAttr = decodeDataAttribute(getDataAttribute(props, 'data-name')) || 'Variable'
+          const defaultValueAttr = decodeDataAttribute(getDataAttribute(props, 'data-default')) || ''
+          const currentValue = userDefines[keyAttr] ?? defaultValueAttr
+
+          return (
+            <DefineInput
+              key={keyAttr}
+              defineKey={keyAttr}
+              name={nameAttr}
+              defaultValue={defaultValueAttr}
+              currentValue={currentValue}
+              onChange={handleDefineChange}
+            />
+          )
+        },
         ['ai-image']: (props: any) => {
           const keyAttr = decodeDataAttribute(getDataAttribute(props, 'data-key'))
           const agentAttr = decodeDataAttribute(getDataAttribute(props, 'data-agent')) || 'ImageGenerator'
-          const imageDataAttr = decodeDataAttribute(getDataAttribute(props, 'data-image'))
-          // Get the latest image data from previewMap
-          const imageData = previewMap[keyAttr] || imageDataAttr
+          // Always get the latest image data from previewMap (ignore data attribute)
+          const imageData = previewMap[keyAttr]
 
           return (
             <ImagePreview
@@ -734,9 +949,8 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
         ['ai-speech']: (props: any) => {
           const keyAttr = decodeDataAttribute(getDataAttribute(props, 'data-key'))
           const agentAttr = decodeDataAttribute(getDataAttribute(props, 'data-agent')) || 'SpeechGenerator'
-          const audioDataAttr = decodeDataAttribute(getDataAttribute(props, 'data-audio'))
-          // Get the latest audio data from previewMap
-          const audioData = previewMap[keyAttr] || audioDataAttr
+          // Always get the latest audio data from previewMap (ignore data attribute)
+          const audioData = previewMap[keyAttr]
 
           return (
             <AudioPreview
@@ -789,7 +1003,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
           )
         },
       } as Components),
-    [previewMap, intentStates, handleIntentTrigger],
+    [previewMap, intentStates, handleIntentTrigger, userDefines, handleDefineChange, defineNameMap],
   )
 
   const handleBlockDragStart = useCallback((index: number) => {
@@ -832,11 +1046,15 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
       const pending: AiCall[] = []
 
       blockList.forEach((block, index) => {
-        extractAiCalls(block, index, agentDefinitions).forEach(call => {
+        extractAiCalls(block, index, agentDefinitions, userDefines, defineNameMap).forEach(call => {
           if (!previewRef.current[call.key]) {
-            const placeholder = samplePreviewForAgent(call.agent)
-            previewRef.current[call.key] = placeholder
-            setPreviewMap(prev => ({ ...prev, [call.key]: placeholder }))
+            // Don't set placeholder for images/speech - let the component show "generating..."
+            // Only set placeholder for text AI calls
+            if (!call.isImage && !call.isSpeech) {
+              const placeholder = samplePreviewForAgent(call.agent)
+              previewRef.current[call.key] = placeholder
+              setPreviewMap(prev => ({ ...prev, [call.key]: placeholder }))
+            }
             pending.push(call)
           }
         })
@@ -913,10 +1131,10 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
             const audioData = payload.audio
 
             if (!cancelled) {
-              if (audioData && typeof audioData === 'string' && audioData.startsWith('data:audio')) {
+              if (audioData && typeof audioData === 'string' && (audioData.startsWith('data:audio') || audioData.startsWith('data:audio/'))) {
                 // Validate the data URL is complete
                 if (audioData.length > 100) {
-                  console.log(`Speech generated successfully for ${call.key}, length: ${audioData.length}`)
+                  console.log(`Speech generated successfully for ${call.key}, length: ${audioData.length}`, { preview: audioData.substring(0, 50) })
                   setPreviewMap(prev => {
                     const next = { ...prev, [call.key]: audioData }
                     previewRef.current = next
@@ -997,7 +1215,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
     return () => {
       cancelled = true
     }
-  }, [agentDefinitions, blockList])
+  }, [agentDefinitions, blockList, userDefines, mcpDefinitions, defineNameMap])
 
   return (
     <section className="flex flex-col gap-4 p-6 lg:p-8">
@@ -1028,7 +1246,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                     rehypePlugins={[rehypeRaw]}
                     components={markdownComponents}
                   >
-                    {replaceAiCalls(block, index, previewMap, agentDefinitions)}
+                    {replaceAiCalls(block, index, previewMap, agentDefinitions, userDefines, defineNameMap)}
                   </ReactMarkdown>
                 </div>
               </li>
