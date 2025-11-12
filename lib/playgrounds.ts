@@ -21,29 +21,35 @@ export type PlaygroundPayload = {
 }
 
 export const listPlaygrounds = async (): Promise<PlaygroundPayload[]> => {
-  const records = await prisma.playground.findMany({
-    orderBy: { createdAt: 'desc' },
-  })
+  try {
+    const records = await prisma.playground.findMany({
+      orderBy: { createdAt: 'desc' },
+    })
 
-  const normalized = await Promise.all(
-    records.map(async record => {
-      const desiredResourcePath = `/playgrounds/${record.id}`
-      if (record.resourcePath !== desiredResourcePath) {
-        try {
-          const updated = await prisma.playground.update({
-            where: { id: record.id },
-            data: { resourcePath: desiredResourcePath },
-          })
-          return updated
-        } catch (error) {
-          console.error('Failed to normalize playground resourcePath', { id: record.id, error })
+    const normalized = await Promise.all(
+      records.map(async record => {
+        const desiredResourcePath = `/playgrounds/${record.id}`
+        if (record.resourcePath !== desiredResourcePath) {
+          try {
+            const updated = await prisma.playground.update({
+              where: { id: record.id },
+              data: { resourcePath: desiredResourcePath },
+            })
+            return updated
+          } catch (error) {
+            console.error('Failed to normalize playground resourcePath', { id: record.id, error })
+          }
         }
-      }
-      return record
-    }),
-  )
+        return record
+      }),
+    )
 
-  return normalized
+    return normalized
+  } catch (error) {
+    console.error('Failed to list playgrounds - database connection error:', error)
+    // Return empty array instead of crashing the app
+    return []
+  }
 }
 
 export const loadPlaygroundBySlug = async (slug: string): Promise<PlaygroundPayload | null> => {
@@ -63,6 +69,38 @@ export const loadPlaygroundById = async (id: string): Promise<PlaygroundPayload 
   } catch (error) {
     console.error('Failed to load playground by id', { id: sanitizedId, error })
     return null
+  }
+}
+
+export const listPlaygroundsByPublisher = async (publisherAddress: string): Promise<PlaygroundPayload[]> => {
+  try {
+    const records = await prisma.playground.findMany({
+      where: { publisherAddress },
+      orderBy: { createdAt: 'desc' },
+    })
+
+    const normalized = await Promise.all(
+      records.map(async record => {
+        const desiredResourcePath = `/playgrounds/${record.id}`
+        if (record.resourcePath !== desiredResourcePath) {
+          try {
+            const updated = await prisma.playground.update({
+              where: { id: record.id },
+              data: { resourcePath: desiredResourcePath },
+            })
+            return updated
+          } catch (error) {
+            console.error('Failed to normalize playground resourcePath', { id: record.id, error })
+          }
+        }
+        return record
+      }),
+    )
+
+    return normalized
+  } catch (error) {
+    console.error('Failed to list playgrounds by publisher - database connection error:', error)
+    return []
   }
 }
 

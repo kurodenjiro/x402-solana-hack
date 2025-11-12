@@ -17,26 +17,13 @@ network: solana-devnet
 
 ## 🧠 Capabilities
 
-- @arg[WalletAddress]:String (Primary wallet to analyze)
-- @tool[SolanaRPC](endpoint: {RPC_URL}, caching: true)
-- @ai[BalanceSummarizer](model: "gpt-4o-mini", tool: [SolanaRPC])
+- `@arg[Wallet]:String` (Primary wallet to analyze)
+- `@ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])`
+- `@mcp[SolanaMCP]("https://mcp.solana.com/mcp")`
 
 ## 🛠️ Workflow
 
-1. Fetch balances for {WalletAddress}
+1. Fetch balances for {Wallet}
 2. Group positions by protocol
 3. Generate recommendations via ~ai[BalanceSummarizer]("Summarize risks and opportunities")
-
-## 🧾 Paywall
-
-This playground requires an x402 payment of **$0.25** to run full analyses.
-
-```
-[lv1]
-  Dashboard
-    [lv2]
-      Net Worth: {TotalValue}
-      24h Change: {Change24h}
-```
-
 

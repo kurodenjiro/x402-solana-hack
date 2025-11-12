@@ -44,7 +44,10 @@ export default function WorkspacePage() {
       const response = await fetch('/api/playgrounds', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ markdown: draft.markdown }),
+        body: JSON.stringify({
+          markdown: draft.markdown,
+          publisherAddress: publicKey?.toBase58(),
+        }),
       })
 
       if (!response.ok) {
@@ -116,11 +119,24 @@ export default function WorkspacePage() {
       {!gated && (
         <>
           <section className="surface-panel flex flex-col gap-3 p-6">
-            <h2 className="text-xl font-semibold text-white">Markdown playground</h2>
-            <p className="text-sm text-neutral-400">
-              Draft your agent workflow in pure Markdown. Titles, summaries, and metadata are now auto-generated from
-              the content you write here.
-            </p>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex-1">
+                <h2 className="text-xl font-semibold text-white">Markdown playground</h2>
+                <p className="mt-1 text-sm text-neutral-400">
+                  Draft your agent workflow in pure Markdown. Titles, summaries, and metadata are now auto-generated from
+                  the content you write here.
+                </p>
+              </div>
+              {publicKey && (
+                <Link
+                  href={`/profile/${publicKey.toBase58()}`}
+                  className="flex flex-col items-end gap-1 rounded-xl border border-white/10 bg-black/30 px-4 py-2 transition hover:border-violet-500/40 hover:bg-black/40"
+                >
+                  <span className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Publisher</span>
+                  <span className="font-mono text-sm text-violet-200">{publicKey.toBase58()}</span>
+                </Link>
+              )}
+            </div>
           </section>
 
           <PlaygroundEditor initial={{ markdown: draft.markdown }} onChange={handleEditorChange} />

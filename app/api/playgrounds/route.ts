@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 
 const playgroundSchema = z.object({
   markdown: z.string().min(10),
+  publisherAddress: z.string().optional(),
 })
 
 const slugify = (value: string) =>
@@ -76,6 +77,7 @@ export async function POST(req: Request) {
   }
 
   const markdown = parsed.data.markdown
+  const publisherAddress = parsed.data.publisherAddress || null
   const title = extractTitle(markdown)
   const summary = extractSummary(markdown)
   const slug = await ensureUniqueSlug(title)
@@ -90,7 +92,7 @@ export async function POST(req: Request) {
       tags: [],
       price: null,
       network: 'solana-devnet',
-      publisherAddress: null,
+      publisherAddress,
       status: 'PUBLISHED',
       resourcePath,
     },
@@ -102,7 +104,7 @@ export async function POST(req: Request) {
       tags: [],
       price: null,
       network: 'solana-devnet',
-      publisherAddress: null,
+      publisherAddress,
       status: 'PUBLISHED',
       resourcePath,
     },

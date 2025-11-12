@@ -137,9 +137,9 @@ const starterBlocks = [
   '# Portfolio Copilot',
   '> A markdown-native agent that reads on-chain data, builds reports, and suggests next actions.',
   '## 🧠 Capabilities',
-  '- @arg[Wallet]:String (Primary wallet to analyze)',
-  '- @ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])',
-  '- @mcp[SolanaMCP]("https://mcp.solana.com/mcp")',
+  '- `@arg[Wallet]:String` (Primary wallet to analyze)',
+  '- `@ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])`',
+  '- `@mcp[SolanaMCP]("https://mcp.solana.com/mcp")`',
   `## 🛠️ Workflow
 1. Fetch balances for {Wallet}
 2. Group positions by protocol
@@ -153,7 +153,6 @@ Include:
 - Notable protocol exposure
 ")`,
   `~intent[BalanceSummarizer](<Summarize risks>,Summarize only the most at-risk positions for {Wallet} in one sentence.)`,
-  '## 🧾 Paywall',
 ]
 
 const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
@@ -639,7 +638,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
   }, [agentDefinitions, blockList])
 
   return (
-    <section className="surface-panel flex flex-col gap-4 p-6 lg:p-8">
+    <section className="flex flex-col gap-4 p-6 lg:p-8">
       <header className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-white">Playground editor</h2>
@@ -739,7 +738,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
           <textarea
             value={markdown}
             onChange={event => handleMarkdownChange(event.target.value)}
-            rows={20}
+            rows={35}
             className="w-full resize-y rounded-xl border border-white/10 bg-black/40 p-4 font-mono text-sm text-neutral-100 focus:border-violet-400 focus:outline-none"
           />
         </div>

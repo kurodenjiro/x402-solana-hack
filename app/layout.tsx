@@ -4,6 +4,7 @@ import Link from 'next/link'
 
 import { SolanaProvider } from '@/components/solana-provider'
 import { ConnectWalletButton } from '@/components/connect-wallet-button'
+import { HeaderNav } from '@/components/header-nav'
 import './globals.css'
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
@@ -25,16 +26,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-lg font-semibold text-neutral-900 shadow-lg shadow-violet-500/30">
                   WM
                 </span>
-                <span className="text-lg font-semibold tracking-tight">Web3 Markdown Playground</span>
+                <span className="text-lg font-semibold tracking-tight">AI-native playground</span>
               </Link>
-              <nav className="hidden items-center gap-6 text-sm font-medium text-neutral-300 md:flex">
-                <Link href="/#playgrounds" className="transition hover:text-white">
-                  Feed
-                </Link>
-                <Link href="/docs" className="transition hover:text-white">
-                  Docs
-                </Link>
-              </nav>
+              <HeaderNav />
               <div className="flex items-center gap-3">
                 <ConnectWalletButton className="hidden md:inline-flex" />
               </div>

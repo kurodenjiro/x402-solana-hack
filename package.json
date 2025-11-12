@@ -9,7 +9,8 @@
     "lint": "eslint . --ext .ts,.tsx",
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
-    "prisma:seed": "tsx prisma/seed.ts"
+    "prisma:seed": "tsx prisma/seed.ts",
+    "db:test": "tsx scripts/test-db-connection.ts"
   },
   "dependencies": {
     "@solana/kit": "3.0.3",
