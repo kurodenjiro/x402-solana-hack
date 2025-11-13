@@ -11,10 +11,15 @@ import { ConnectWalletButton } from '@/components/connect-wallet-button'
 
 type DraftPayload = {
   markdown: string
+  previews?: Record<string, string>
+  isGenerating?: boolean
+  playgroundId?: string
 }
 
 const initialDraft: DraftPayload = {
   markdown: '',
+  previews: {},
+  isGenerating: false,
 }
 
 export default function WorkspacePage() {
@@ -25,8 +30,8 @@ export default function WorkspacePage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
-  const handleEditorChange = useCallback((payload: { markdown: string }) => {
-    setDraft(prev => ({ ...prev, markdown: payload.markdown }))
+  const handleEditorChange = useCallback((payload: { markdown: string; previews?: Record<string, string>; isGenerating?: boolean }) => {
+    setDraft(prev => ({ ...prev, markdown: payload.markdown, previews: payload.previews, isGenerating: payload.isGenerating }))
   }, [])
 
   const handleSubmit = async () => {
@@ -46,6 +51,7 @@ export default function WorkspacePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           markdown: draft.markdown,
+          previews: draft.previews || {},
           publisherAddress: publicKey?.toBase58(),
         }),
       })
@@ -54,6 +60,11 @@ export default function WorkspacePage() {
         const data = await response.json()
         throw new Error(data.error ? JSON.stringify(data.error) : 'Failed to save playground')
       }
+
+      const savedPlayground = await response.json()
+      
+      // Update draft with playground ID for future media asset linking
+      setDraft(prev => ({ ...prev, playgroundId: savedPlayground.id }))
 
       setSuccess('Playground saved! Redirecting to feed…')
       setTimeout(() => router.push('/#playgrounds'), 1200)
@@ -139,16 +150,20 @@ export default function WorkspacePage() {
             </div>
           </section>
 
-          <PlaygroundEditor initial={{ markdown: draft.markdown }} onChange={handleEditorChange} />
+          <PlaygroundEditor 
+            initial={{ markdown: draft.markdown, previews: draft.previews }} 
+            playgroundId={draft.playgroundId}
+            onChange={handleEditorChange} 
+          />
 
           <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={saving}
+              disabled={saving || draft.isGenerating}
               className="inline-flex items-center justify-center rounded-full bg-white px-6 py-3 text-sm font-semibold text-neutral-900 transition hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {saving ? 'Saving…' : 'Save playground'}
+              {saving ? 'Saving…' : draft.isGenerating ? 'Generating content…' : 'Save playground'}
             </button>
             {error ? <span className="text-sm text-rose-400">{error}</span> : null}
             {success ? <span className="text-sm text-emerald-400">{success}</span> : null}

@@ -20,8 +20,9 @@ type IntentTriggerPayload = {
 }
 
 type PlaygroundEditorProps = {
-  initial?: Partial<PlaygroundPayload>
-  onChange?: (payload: { markdown: string; blocks: string[] }) => void
+  initial?: Partial<PlaygroundPayload> & { previews?: Record<string, string> }
+  playgroundId?: string // Optional playground ID for linking media assets
+  onChange?: (payload: { markdown: string; blocks: string[]; previews?: Record<string, string>; isGenerating?: boolean }) => void
 }
 
 const splitMarkdownBlocks = (markdown: string): string[] => {
@@ -95,7 +96,11 @@ type ImagePreviewProps = {
 }
 
 const ImagePreview = ({ imageKey, agent, imageData }: ImagePreviewProps) => {
-  if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image') && imageData.length > 100) {
+  // Check if it's a URL or data URL
+  const isUrl = imageData && typeof imageData === 'string' && imageData.startsWith('/api/media')
+  const isDataUrl = imageData && typeof imageData === 'string' && imageData.startsWith('data:image') && imageData.length > 100
+  
+  if (isUrl || isDataUrl) {
     return (
       <div className="my-3">
         <img
@@ -129,10 +134,17 @@ type AudioPreviewProps = {
 }
 
 const AudioPreview = ({ audioKey, agent, audioData }: AudioPreviewProps) => {
-  if (audioData && typeof audioData === 'string' && (audioData.startsWith('data:audio') || audioData.startsWith('data:audio/')) && audioData.length > 100) {
-    // Extract MIME type from data URL
-    const mimeTypeMatch = audioData.match(/^data:([^;]+)/)
-    const mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'audio/mpeg'
+  // Check if it's a URL or data URL
+  const isUrl = audioData && typeof audioData === 'string' && audioData.startsWith('/api/media')
+  const isDataUrl = audioData && typeof audioData === 'string' && (audioData.startsWith('data:audio') || audioData.startsWith('data:audio/')) && audioData.length > 100
+  
+  if (isUrl || isDataUrl) {
+    // Extract MIME type from data URL if needed, otherwise use default
+    let mimeType = 'audio/mpeg'
+    if (isDataUrl) {
+      const mimeTypeMatch = audioData.match(/^data:([^;]+)/)
+      mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'audio/mpeg'
+    }
     
     return (
       <div className="my-3">
@@ -271,13 +283,13 @@ const starterBlocks = [
   `::: 
 @define[Wallet](3NAseqQ76ATx6E9iG8EztpGS1ofgt3URvGSZf965XLeA)
 
-@mcp[SolanaMCP]("https://mcp.solana.com/mcp")
+@mcp[SolanaMCP](https://mcp.solana.com/mcp)
 **Description:** Solana MCP service for protocol metadata, pricing, and account enrichment.
 
 @tool[SolanaBalanceTool](address: String)
 **Description:** get solana balance wallet
 
-@ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])
+@ai[BalanceSummarizer](gpt-4o-mini,[SolanaMCP,SolanaBalanceTool])
 **Description:** Summarize risks and opportunities across holdings.
 
 :::`,
@@ -285,30 +297,37 @@ const starterBlocks = [
   '> A markdown-native agent that reads on-chain data, builds reports, and suggests next actions.',
   '## 🧠 Capabilities',
   '- `@arg[Wallet]:String` (Primary wallet to analyze)',
-  '- `@ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])`',
-  '- `@mcp[SolanaMCP]("https://mcp.solana.com/mcp")`',
+  '- `@ai[BalanceSummarizer](gpt-4o-mini,[SolanaMCP,SolanaBalanceTool])`',
+  '- `@mcp[SolanaMCP](https://mcp.solana.com/mcp)`',
   `## 🛠️ Workflow
 1. Fetch balances for {Wallet}
 2. Group positions by protocol
 3. Generate recommendations via 
 
-~ai[BalanceSummarizer]("
+~ai[BalanceSummarizer]("""
 Summarize risks and opportunities for wallet {Wallet}.
 Include:
 - At-risk positions
 - Suggested rebalancing moves
 - Notable protocol exposure
-")`,
+""")`,
   `~intent[BalanceSummarizer](<Summarize risks>,Summarize only the most at-risk positions for {Wallet} in one sentence.)`,
   `~define[Wallet](Wallet Address)`,
-  `~ai-image[ImageGenerator]("A futuristic Solana blockchain visualization with neon colors")`,
-  `~ai-speech[VoiceGenerator]("Welcome to the AI-native playground. This is a demonstration of text-to-speech generation.")`,
+  `~ai-image[ImageGenerator](A futuristic Solana blockchain visualization with neon colors)`,
+  `~ai-speech[VoiceGenerator](Welcome to the AI-native playground. This is a demonstration of text-to-speech generation.)`,
 ]
 
-const aiSingleRegex = /~ai\[(.+?)\]\("([^"\n]+)"\)/g
-const aiMultilineRegex = /~ai\[(.+?)\]\("\s*([\s\S]*?)\s*"\)/g
-const aiImageRegex = /~ai-image\[(.+?)\]\("([^"]+)"\)/g
-const aiSpeechRegex = /~ai-speech\[(.+?)\]\("([^"]+)"\)/g
+// Updated regex patterns - supports both unquoted and triple-quoted syntax
+// Triple-quoted multi-line: ~ai[Agent]("""multi-line prompt""")
+const aiTripleQuoteRegex = /~ai\[(.+?)\]\(\s*"""\s*([\s\S]*?)\s*"""\s*\)/g
+// Unquoted multi-line: ~ai[Agent](prompt with
+// multiple lines) - must check this before single line, but exclude triple-quoted
+// Uses negative lookahead to ensure it doesn't start with """
+const aiMultilineRegex = /~ai\[(.+?)\]\(\s*(?!""")([\s\S]*?)\s*\)/g
+// Single line: ~ai[Agent](prompt) - only matches if no newlines in prompt
+const aiSingleRegex = /~ai\[(.+?)\]\(([^)\n]+)\)/g
+const aiImageRegex = /~ai-image\[(.+?)\]\(([^)]+)\)/g
+const aiSpeechRegex = /~ai-speech\[(.+?)\]\(([^)]+)\)/g
 const defineRegex = /~define\[(.+?)\]\(([^)]+)\)/g
 const intentRegex = /~intent\[(.+?)\]\(<([^>]+)>,\s*([\s\S]*?)\)/g
 const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
@@ -501,11 +520,29 @@ const extractAiCalls = (
     return calls
   }
 
-  const singleMatches = [...block.matchAll(aiSingleRegex)]
-  singleMatches.forEach(match => {
+  // Process triple-quoted first, then multiline, then single line to avoid duplicates
+  const processedKeys = new Set<string>()
+  
+  // Triple-quoted strings: ~ai[Agent]("""prompt""")
+  const tripleQuoteMatches = [...block.matchAll(aiTripleQuoteRegex)]
+  tripleQuoteMatches.forEach(match => {
     const [, agent, prompt] = match
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const promptKey = normalizePrompt(prompt)
+    const key = `${index}:${agent.trim()}:${promptKey}`
+    
+    console.log(`[AI Preview] Triple-quote extraction - key: "${key}"`, {
+      agent: agent.trim(),
+      promptLength: prompt.length,
+      promptKey: promptKey.substring(0, 50),
+      originalPrompt: prompt.substring(0, 50)
+    })
+    
+    if (processedKeys.has(key)) {
+      return
+    }
+    processedKeys.add(key)
+    
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const aiDefinition = definitions.find(
       def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
     )
@@ -514,7 +551,7 @@ const extractAiCalls = (
       : undefined
 
     calls.push({
-      key: `${index}:${agent}:${promptKey}`,
+      key,
       agent: agent.trim(),
       prompt: promptWithDefinitions,
       signature: aiDefinition?.params,
@@ -527,11 +564,21 @@ const extractAiCalls = (
     })
   })
 
+  // Unquoted multiline: ~ai[Agent](prompt with
+  // multiple lines)
   const multilineMatches = [...block.matchAll(aiMultilineRegex)]
   multilineMatches.forEach(match => {
     const [, agent, prompt] = match
-    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const promptKey = normalizePrompt(prompt)
+    const key = `${index}:${agent.trim()}:${promptKey}`
+    
+    // Skip if already processed (avoid duplicates)
+    if (processedKeys.has(key)) {
+      return
+    }
+    processedKeys.add(key)
+    
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
     const aiDefinition = definitions.find(
       def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
     )
@@ -540,7 +587,41 @@ const extractAiCalls = (
       : undefined
 
     calls.push({
-      key: `${index}:${agent}:${promptKey}`,
+      key,
+      agent: agent.trim(),
+      prompt: promptWithDefinitions,
+      signature: aiDefinition?.params,
+      tool: toolDefinition
+        ? {
+            name: toolDefinition.name,
+            params: toolDefinition.params,
+          }
+        : undefined,
+    })
+  })
+
+  const singleMatches = [...block.matchAll(aiSingleRegex)]
+  singleMatches.forEach(match => {
+    const [, agent, prompt] = match
+    const promptKey = normalizePrompt(prompt)
+    const key = `${index}:${agent.trim()}:${promptKey}`
+    
+    // Skip if already processed by multiline regex
+    if (processedKeys.has(key)) {
+      return
+    }
+    processedKeys.add(key)
+    
+    const promptWithDefinitions = substituteDefinitions(prompt, definitions, userDefines, defineNameMap)
+    const aiDefinition = definitions.find(
+      def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
+    )
+    const toolDefinition = aiDefinition?.tool
+      ? definitions.find(def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase())
+      : undefined
+
+    calls.push({
+      key,
       agent: agent.trim(),
       prompt: promptWithDefinitions,
       signature: aiDefinition?.params,
@@ -588,7 +669,8 @@ const replaceAiCalls = (
   block: string,
   index: number,
   previews: Record<string, string>,
-  definitions: AgentDefinition[],
+  previewRef?: React.MutableRefObject<Record<string, string>>,
+  definitions?: AgentDefinition[],
   userDefines?: Record<string, string>,
   defineNameMap?: Record<string, string>,
 ) => {
@@ -599,23 +681,97 @@ const replaceAiCalls = (
   let processedBlock = block
 
   const formatResponse = (agent: string, response: string) => {
-    if (response.startsWith(`🤖 ${agent.trim()}:`)) {
-      const content = response.slice(response.indexOf(':') + 1).trimStart()
-      return `### ${agent.trim()}\n\n${content}`
+    // Check if it's the thinking state - show bot emoji with name
+    // The thinking state is exactly: "🤖 AgentName: thinking…"
+    const thinkingPattern = `🤖 ${agent.trim()}: thinking…`
+    if (response === thinkingPattern || response === `🤖 **${agent.trim()}**: thinking…`) {
+      return `🤖 **${agent.trim()}**: thinking…`
     }
-    return response
+    // Check if response is an error message
+    if (response.startsWith('⚠️')) {
+      return response
+    }
+    // After generation, the response is just the content (no bot name prefix)
+    // If response exists and is not the thinking pattern, show it
+    if (response && response !== thinkingPattern) {
+      return response
+    }
+    // Fallback to thinking state
+    return `🤖 **${agent.trim()}**: thinking…`
   }
 
-  processedBlock = processedBlock.replace(aiSingleRegex, (_, agent: string, prompt: string) => {
-    const key = `${index}:${agent}:${normalizePrompt(prompt)}`
-    const output = previews[key] ?? samplePreviewForAgent(agent)
-    return formatResponse(agent, output)
+  // Process triple-quoted first, then multiline, then single line to avoid duplicates
+  const processedKeys = new Set<string>()
+  
+  // Triple-quoted strings: ~ai[Agent]("""prompt""")
+  const tripleQuoteMatches = [...processedBlock.matchAll(aiTripleQuoteRegex)]
+  tripleQuoteMatches.forEach(match => {
+    const [fullMatch, agent, prompt] = match
+    const normalizedPrompt = normalizePrompt(prompt)
+    const key = `${index}:${agent.trim()}:${normalizedPrompt}`
+    if (!processedKeys.has(key)) {
+      processedKeys.add(key)
+      // Check both state and ref for the latest preview
+      const refOutput = previewRef?.current?.[key]
+      const stateOutput = previews[key]
+      const output = refOutput ?? stateOutput
+      console.log(`[AI Preview] Triple-quote rendering - key: "${key}"`, {
+        hasRefOutput: !!refOutput,
+        hasStateOutput: !!stateOutput,
+        refOutputPreview: refOutput?.substring(0, 50) || 'none',
+        stateOutputPreview: stateOutput?.substring(0, 50) || 'none',
+        outputLength: output?.length || 0,
+        outputPreview: output?.substring(0, 50) || 'none',
+        normalizedPrompt: normalizedPrompt.substring(0, 50),
+        allRefKeys: Object.keys(previewRef?.current || {}),
+        allStateKeys: Object.keys(previews)
+      })
+      if (!output) {
+        // No preview yet, show thinking state
+        processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, samplePreviewForAgent(agent)))
+      } else {
+        // We have a preview, format it
+        processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, output))
+      }
+    }
   })
 
-  processedBlock = processedBlock.replace(aiMultilineRegex, (_, agent: string, prompt: string) => {
-    const key = `${index}:${agent}:${normalizePrompt(prompt)}`
-    const output = previews[key] ?? samplePreviewForAgent(agent)
-    return formatResponse(agent, output)
+  // Unquoted multiline: ~ai[Agent](prompt with
+  // multiple lines)
+  const multilineMatches = [...processedBlock.matchAll(aiMultilineRegex)]
+  multilineMatches.forEach(match => {
+    const [fullMatch, agent, prompt] = match
+      const key = `${index}:${agent.trim()}:${normalizePrompt(prompt)}`
+      if (!processedKeys.has(key)) {
+        processedKeys.add(key)
+        // Check both state and ref for the latest preview
+        const output = previewRef?.current?.[key] ?? previews[key]
+        if (!output) {
+          // No preview yet, show thinking state
+          processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, samplePreviewForAgent(agent)))
+        } else {
+          // We have a preview, format it
+          console.log(`[AI Preview] Found preview for key: "${key}"`, { outputLength: output.length, outputPreview: output.substring(0, 50) })
+          processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, output))
+        }
+      }
+  })
+
+  processedBlock = processedBlock.replace(aiSingleRegex, (match, agent: string, prompt: string) => {
+    const key = `${index}:${agent.trim()}:${normalizePrompt(prompt)}`
+    // Skip if already processed
+    if (processedKeys.has(key)) {
+      return match
+    }
+    // Check both state and ref for the latest preview
+    const output = previewRef?.current?.[key] ?? previews[key]
+    if (!output) {
+      // No preview yet, show thinking state
+      return formatResponse(agent, samplePreviewForAgent(agent))
+    } else {
+      // We have a preview, format it
+      return formatResponse(agent, output)
+    }
   })
 
   processedBlock = processedBlock.replace(aiImageRegex, (_, agent: string, prompt: string) => {
@@ -641,7 +797,7 @@ const replaceAiCalls = (
   processedBlock = processedBlock.replace(defineRegex, (_, name: string, label: string) => {
     const key = `define:${index}:${name}`
     // Get default value from agent definitions if available
-    const agentDefine = definitions.find(
+    const agentDefine = definitions?.find(
       def => def.kind.toLowerCase() === 'define' && def.name.toLowerCase() === name.trim().toLowerCase()
     )
     const defaultValue = agentDefine ? (agentDefine.params.trim() || '') : ''
@@ -659,7 +815,7 @@ const replaceAiCalls = (
     const normalizedPrompt = prompt.trim()
     const promptKey = normalizePrompt(normalizedPrompt)
     const key = `${index}:${normalizedAgent}:${promptKey}`
-    const promptWithDefinitions = substituteDefinitions(normalizedPrompt, definitions, userDefines, defineNameMap)
+    const promptWithDefinitions = substituteDefinitions(normalizedPrompt, definitions ?? [], userDefines, defineNameMap)
 
     const keyAttr = encodeDataAttribute(key)
     const agentAttr = encodeDataAttribute(normalizedAgent)
@@ -670,10 +826,10 @@ const replaceAiCalls = (
     return `\n<intent-button data-key="${keyAttr}" data-agent="${agentAttr}" data-button-text="${buttonTextAttr}" data-prompt="${rawPromptAttr}" data-rendered="${renderedPromptAttr}"></intent-button>\n`
   })
 
-  return substituteDefinitions(processedBlock, definitions, userDefines, defineNameMap)
+  return substituteDefinitions(processedBlock, definitions ?? [], userDefines, defineNameMap)
 }
 
-export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) => {
+export const PlaygroundEditor = ({ initial, playgroundId, onChange }: PlaygroundEditorProps) => {
   const [markdown, setMarkdown] = useState(initial?.markdown ?? starterBlocks.join('\n\n'))
   const blockList = useMemo(() => splitMarkdownBlocks(markdown), [markdown])
   const agentDefinitions = useMemo(() => {
@@ -697,10 +853,27 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
     return entries
   }, [blockList])
   const [dragIndex, setDragIndex] = useState<number | null>(null)
-  const [previewMap, setPreviewMap] = useState<Record<string, string>>({})
-  const previewRef = useRef<Record<string, string>>({})
+  
+  // Initialize previews with placeholders for all AI calls on first render
+  const initialPreviews = useMemo(() => {
+    const previews: Record<string, string> = {}
+    blockList.forEach((block, index) => {
+      extractAiCalls(block, index, agentDefinitions, {}, {}).forEach(call => {
+        if (!call.isImage && !call.isSpeech) {
+          previews[call.key] = samplePreviewForAgent(call.agent)
+        }
+      })
+    })
+    return previews
+  }, [blockList, agentDefinitions])
+  
+  // Initialize with saved previews if available, otherwise use initial placeholders
+  const savedPreviews = initial?.previews || {}
+  const [previewMap, setPreviewMap] = useState<Record<string, string>>({ ...initialPreviews, ...savedPreviews })
+  const previewRef = useRef<Record<string, string>>({ ...initialPreviews, ...savedPreviews })
   const [intentStates, setIntentStates] = useState<Record<string, IntentState>>({})
   const [userDefines, setUserDefines] = useState<Record<string, string>>({})
+  const [isGenerating, setIsGenerating] = useState(false)
 
   // Extract define calls and initialize userDefines
   const defineCalls = useMemo(() => {
@@ -768,6 +941,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
               const block = blockList[blockIndex]
               // Check all AI call patterns
               const allMatches = [
+                ...block.matchAll(aiTripleQuoteRegex),
                 ...block.matchAll(aiSingleRegex),
                 ...block.matchAll(aiMultilineRegex),
                 ...block.matchAll(aiImageRegex),
@@ -1040,18 +1214,18 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
       const nextMarkdown = nextBlocks.join('\n\n')
       setMarkdown(nextMarkdown)
       setDragIndex(null)
-      onChange?.({ markdown: nextMarkdown, blocks: nextBlocks })
+      onChange?.({ markdown: nextMarkdown, blocks: nextBlocks, previews: previewRef.current, isGenerating })
     },
-    [dragIndex, blockList, onChange, resetPreviews],
+    [dragIndex, blockList, onChange, resetPreviews, isGenerating],
   )
 
   const handleMarkdownChange = useCallback(
     (value: string) => {
       resetPreviews()
       setMarkdown(value)
-      onChange?.({ markdown: value, blocks: splitMarkdownBlocks(value) })
+      onChange?.({ markdown: value, blocks: splitMarkdownBlocks(value), previews: previewRef.current, isGenerating })
     },
-    [onChange, resetPreviews],
+    [onChange, resetPreviews, isGenerating],
   )
 
   useEffect(() => {
@@ -1059,25 +1233,62 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
 
     const run = async () => {
       const pending: AiCall[] = []
+      const initialPreviews: Record<string, string> = {}
 
+      // First pass: collect all AI calls and set placeholders for new ones only
       blockList.forEach((block, index) => {
         extractAiCalls(block, index, agentDefinitions, userDefines, defineNameMap).forEach(call => {
-          if (!previewRef.current[call.key]) {
+          const existingPreview = previewRef.current[call.key]
+          const isPlaceholder = existingPreview === samplePreviewForAgent(call.agent) || 
+                                existingPreview?.includes('thinking…')
+          
+          console.log(`[AI Preview] Checking call: "${call.key}"`, {
+            hasExisting: !!existingPreview,
+            isPlaceholder,
+            existingPreview: existingPreview?.substring(0, 50),
+            agent: call.agent,
+            promptPreview: call.prompt.substring(0, 50)
+          })
+          
+          // If no preview exists, or it's just a placeholder, we need to generate it
+          if (!existingPreview || isPlaceholder) {
             // Don't set placeholder for images/speech - let the component show "generating..."
             // Only set placeholder for text AI calls
             if (!call.isImage && !call.isSpeech) {
               const placeholder = samplePreviewForAgent(call.agent)
               previewRef.current[call.key] = placeholder
-              setPreviewMap(prev => ({ ...prev, [call.key]: placeholder }))
+              initialPreviews[call.key] = placeholder
             }
+            console.log(`[AI Preview] Adding to pending: "${call.key}"`)
             pending.push(call)
+          } else {
+            console.log(`[AI Preview] Skipping (already has content): "${call.key}"`)
           }
         })
       })
+      
+      console.log(`[AI Preview] Total pending calls: ${pending.length}`, pending.map(c => c.key))
+
+      // Set all placeholders at once to trigger a single render (only update if there are new ones)
+      if (Object.keys(initialPreviews).length > 0) {
+        setPreviewMap(prev => {
+          // Only add new previews, don't overwrite existing ones
+          const updates: Record<string, string> = {}
+          Object.keys(initialPreviews).forEach(key => {
+            if (!prev[key]) {
+              updates[key] = initialPreviews[key]
+            }
+          })
+          return Object.keys(updates).length > 0 ? { ...prev, ...updates } : prev
+        })
+      }
 
       if (!pending.length) {
+        setIsGenerating(false)
         return
       }
+
+      setIsGenerating(true)
 
       for (const call of pending) {
         try {
@@ -1089,6 +1300,8 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                 type: 'image',
                 bot: call.agent,
                 prompt: call.prompt,
+                key: call.key,
+                playgroundId: playgroundId,
               }),
             })
 
@@ -1100,17 +1313,20 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
             const imageData = payload.image
 
             if (!cancelled) {
-              if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
-                // Validate the data URL is complete
-                if (imageData.length > 100) {
-                  console.log(`Image generated successfully for ${call.key}, length: ${imageData.length}`)
+              if (imageData && typeof imageData === 'string') {
+                // Check if it's a URL (starts with /api/media) or data URL
+                const isUrl = imageData.startsWith('/api/media')
+                const isDataUrl = imageData.startsWith('data:image')
+                
+                if (isUrl || (isDataUrl && imageData.length > 100)) {
+                  console.log(`Image generated successfully for ${call.key}, ${isUrl ? 'URL' : 'data URL'}: ${isUrl ? imageData : imageData.length + ' chars'}`)
                   setPreviewMap(prev => {
                     const next = { ...prev, [call.key]: imageData }
                     previewRef.current = next
                     return next
                   })
                 } else {
-                  console.warn(`Image data URL too short for ${call.key}: ${imageData.length} chars`)
+                  console.warn(`Image data invalid for ${call.key}: ${isDataUrl ? 'too short' : 'invalid format'}`)
                   setPreviewMap(prev => {
                     const next = { ...prev, [call.key]: `⚠️ ${call.agent}: invalid image data` }
                     previewRef.current = next
@@ -1119,7 +1335,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                 }
               } else {
                 const errorMsg = payload.error || 'No image data received'
-                console.error(`Image generation failed for ${call.key}:`, errorMsg, { hasImage: !!imageData, type: typeof imageData, preview: imageData?.substring(0, 50) })
+                console.error(`Image generation failed for ${call.key}:`, errorMsg)
                 setPreviewMap(prev => {
                   const next = { ...prev, [call.key]: `⚠️ ${call.agent}: ${errorMsg}` }
                   previewRef.current = next
@@ -1135,6 +1351,8 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                 type: 'speech',
                 bot: call.agent,
                 prompt: call.prompt,
+                key: call.key,
+                playgroundId: playgroundId,
               }),
             })
 
@@ -1146,17 +1364,20 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
             const audioData = payload.audio
 
             if (!cancelled) {
-              if (audioData && typeof audioData === 'string' && (audioData.startsWith('data:audio') || audioData.startsWith('data:audio/'))) {
-                // Validate the data URL is complete
-                if (audioData.length > 100) {
-                  console.log(`Speech generated successfully for ${call.key}, length: ${audioData.length}`, { preview: audioData.substring(0, 50) })
+              if (audioData && typeof audioData === 'string') {
+                // Check if it's a URL (starts with /api/media) or data URL
+                const isUrl = audioData.startsWith('/api/media')
+                const isDataUrl = audioData.startsWith('data:audio') || audioData.startsWith('data:audio/')
+                
+                if (isUrl || (isDataUrl && audioData.length > 100)) {
+                  console.log(`Speech generated successfully for ${call.key}, ${isUrl ? 'URL' : 'data URL'}: ${isUrl ? audioData : audioData.length + ' chars'}`)
                   setPreviewMap(prev => {
                     const next = { ...prev, [call.key]: audioData }
                     previewRef.current = next
                     return next
                   })
                 } else {
-                  console.warn(`Audio data URL too short for ${call.key}: ${audioData.length} chars`)
+                  console.warn(`Audio data invalid for ${call.key}: ${isDataUrl ? 'too short' : 'invalid format'}`)
                   setPreviewMap(prev => {
                     const next = { ...prev, [call.key]: `⚠️ ${call.agent}: invalid audio data` }
                     previewRef.current = next
@@ -1165,7 +1386,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                 }
               } else {
                 const errorMsg = payload.error || 'No audio data received'
-                console.error(`Speech generation failed for ${call.key}:`, errorMsg, { hasAudio: !!audioData, type: typeof audioData, preview: audioData?.substring(0, 50) })
+                console.error(`Speech generation failed for ${call.key}:`, errorMsg)
                 setPreviewMap(prev => {
                   const next = { ...prev, [call.key]: `⚠️ ${call.agent}: ${errorMsg}` }
                   previewRef.current = next
@@ -1197,40 +1418,87 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
             })
 
             if (!response.ok) {
-              throw new Error(`Request failed with status ${response.status}`)
+              const errorText = await response.text()
+              console.error(`API request failed for ${call.key}:`, response.status, errorText)
+              throw new Error(`Request failed with status ${response.status}: ${errorText}`)
             }
 
-            const payload: { content?: string } = await response.json()
-            const content = payload.content?.trim()
-              ? `🤖 ${call.agent}: ${payload.content.trim()}`
-              : `🤖 ${call.agent}: (no response)`
+            const payload: { content?: string; error?: string } = await response.json()
+            
+            if (!payload.content && !payload.error) {
+              console.warn(`No content or error in response for ${call.key}:`, payload)
+            }
+            
+            if (payload.error) {
+              if (!cancelled) {
+                setPreviewMap(prev => {
+                  const next = { ...prev, [call.key]: `⚠️ ${call.agent}: ${payload.error}` }
+                  previewRef.current = next
+                  return next
+                })
+              }
+            } else {
+              const content = payload.content?.trim()
+                ? payload.content.trim() // Store content without bot name prefix - formatResponse will handle display
+                : `⚠️ ${call.agent}: (no response)`
 
-            if (!cancelled) {
-              setPreviewMap(prev => {
-                const next = { ...prev, [call.key]: content }
-                previewRef.current = next
-                return next
-              })
+              if (!cancelled) {
+                console.log(`[AI Preview] Updating preview for key: "${call.key}"`, {
+                  agent: call.agent,
+                  originalPrompt: call.prompt.substring(0, 100),
+                  promptKey: normalizePrompt(call.prompt),
+                  contentLength: content.length,
+                  contentPreview: content.substring(0, 100),
+                  allKeys: Object.keys(previewRef.current)
+                })
+                // Update ref immediately (synchronous)
+                previewRef.current[call.key] = content
+                setPreviewMap(prev => {
+                  const next = { ...prev, [call.key]: content }
+                  console.log(`[AI Preview] Preview map updated. Key "${call.key}" now has:`, content.substring(0, 50))
+                  return next
+                })
+              }
             }
           }
         } catch (error) {
           if (!cancelled) {
             setPreviewMap(prev => {
               const next = { ...prev, [call.key]: `⚠️ ${call.agent}: unable to generate preview` }
-              previewRef.current = next
+              previewRef.current[call.key] = next[call.key]
               return next
             })
           }
         }
       }
+      
+      // All calls completed
+      setIsGenerating(false)
     }
 
     run()
 
     return () => {
       cancelled = true
+      setIsGenerating(false)
     }
   }, [agentDefinitions, blockList, userDefines, mcpDefinitions, defineNameMap])
+
+  // Trigger onChange when previews are updated so they get saved
+  // Use a ref to track previous previews to avoid unnecessary calls
+  const prevPreviewsRef = useRef<Record<string, string>>({})
+  useEffect(() => {
+    const previewsChanged = JSON.stringify(previewRef.current) !== JSON.stringify(prevPreviewsRef.current)
+    if (previewsChanged && Object.keys(previewRef.current).length > 0) {
+      prevPreviewsRef.current = { ...previewRef.current }
+      onChange?.({ markdown, blocks: blockList, previews: previewRef.current, isGenerating })
+    }
+  }, [previewMap, markdown, blockList, isGenerating, onChange])
+  
+  // Also notify when generation state changes
+  useEffect(() => {
+    onChange?.({ markdown, blocks: blockList, previews: previewRef.current, isGenerating })
+  }, [isGenerating])
 
   return (
     <section className="flex flex-col gap-4 p-6 lg:p-8">
@@ -1261,7 +1529,7 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
                     rehypePlugins={[rehypeRaw]}
                     components={markdownComponents}
                   >
-                    {replaceAiCalls(block, index, previewMap, agentDefinitions, userDefines, defineNameMap)}
+                    {replaceAiCalls(block, index, previewMap, previewRef, agentDefinitions, userDefines, defineNameMap)}
                   </ReactMarkdown>
                 </div>
               </li>
@@ -1281,4 +1549,5 @@ export const PlaygroundEditor = ({ initial, onChange }: PlaygroundEditorProps) =
     </section>
   )
 }
+
 

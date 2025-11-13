@@ -1,10 +1,8 @@
 import React from 'react'
 import { notFound } from 'next/navigation'
-import ReactMarkdown from 'react-markdown'
-import type { Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 
 import { loadPlaygroundById, loadPlaygroundBySlug } from '@/lib/playgrounds'
+import { PlaygroundViewer } from '@/components/playground-viewer'
 
 type PlaygroundPageParams = {
   id: string
@@ -45,33 +43,12 @@ export default async function PlaygroundDetailPage({ params }: PlaygroundPagePro
         <p className="text-sm text-neutral-400">{playground.summary}</p>
       </header>
       <section className="surface-panel prose prose-invert max-w-none p-8">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            img({ src, alt, ...props }: any) {
-              // Validate src is a non-empty string
-              if (!src || typeof src !== 'string' || src.trim() === '') {
-                return null
-              }
-              // For data URLs (generated images), ensure they're valid
-              if (src.startsWith('data:image')) {
-                if (src.length < 100) {
-                  return null
-                }
-              }
-              return (
-                <img
-                  src={src}
-                  alt={alt || 'Generated image'}
-                  className="rounded-lg border border-white/10 max-w-full"
-                  {...props}
-                />
-              )
-            },
-          } as Components}
-        >
-          {playground.markdown}
-        </ReactMarkdown>
+        <PlaygroundViewer 
+          markdown={playground.markdown} 
+          previews={playground.previews && typeof playground.previews === 'object' 
+            ? playground.previews as Record<string, string>
+            : undefined} 
+        />
       </section>
     </main>
   )

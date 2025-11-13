@@ -1,0 +1,458 @@
+'use client'
+
+import React, { useState, useCallback } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+import type { Components } from 'react-markdown'
+
+// Import regex patterns and helper functions from the editor
+const aiTripleQuoteRegex = /~ai\[(.+?)\]\(\s*"""\s*([\s\S]*?)\s*"""\s*\)/g
+const aiMultilineRegex = /~ai\[(.+?)\]\(\s*(?!""")([\s\S]*?)\s*\)/g
+const aiSingleRegex = /~ai\[(.+?)\]\(([^)\n]+)\)/g
+const aiImageRegex = /~ai-image\[(.+?)\]\(([^)]+)\)/g
+const aiSpeechRegex = /~ai-speech\[(.+?)\]\(([^)]+)\)/g
+const defineRegex = /~define\[(.+?)\]\(([^)]+)\)/g
+const intentRegex = /~intent\[(.+?)\]\(<([^>]+)>,\s*([\s\S]*?)\)/g
+const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
+
+const normalizePrompt = (prompt: string) => prompt.replace(/\r\n/g, '\n').trim()
+
+const splitMarkdownBlocks = (markdown: string): string[] => {
+  const lines = markdown.split('\n')
+  const blocks: string[] = []
+  let buffer: string[] = []
+  let insideAgent = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (trimmed === ':::') {
+      if (insideAgent) {
+        buffer.push(line)
+        blocks.push(buffer.join('\n'))
+        buffer = []
+        insideAgent = false
+      } else {
+        if (buffer.length > 0) {
+          blocks.push(buffer.join('\n'))
+          buffer = []
+        }
+        buffer.push(line)
+        insideAgent = true
+      }
+    } else {
+      buffer.push(line)
+      if (!insideAgent && trimmed === '') {
+        if (buffer.length > 1) {
+          blocks.push(buffer.slice(0, -1).join('\n'))
+          buffer = [buffer[buffer.length - 1]]
+        }
+      }
+    }
+  }
+
+  if (buffer.length > 0) {
+    blocks.push(buffer.join('\n'))
+  }
+
+  return blocks.filter(block => block.trim().length > 0)
+}
+
+const parseAgentDefinitionBlock = (block: string): boolean => {
+  return agentDefineRegex.test(block.trim())
+}
+
+const formatResponse = (agent: string, response: string) => {
+  const thinkingPattern = `🤖 ${agent.trim()}: thinking…`
+  if (response === thinkingPattern || response === `🤖 **${agent.trim()}**: thinking…`) {
+    return `🤖 **${agent.trim()}**: thinking…`
+  }
+  if (response.startsWith('⚠️')) {
+    return response
+  }
+  if (response && response !== thinkingPattern) {
+    return response
+  }
+  return `🤖 **${agent.trim()}**: thinking…`
+}
+
+const processBlock = (block: string, index: number, previews: Record<string, string>): string => {
+  // Skip agent definition blocks
+  if (parseAgentDefinitionBlock(block)) {
+    return ''
+  }
+
+  let processedBlock = block
+  const processedKeys = new Set<string>()
+
+  // Process triple-quoted strings
+  const tripleQuoteMatches = [...processedBlock.matchAll(aiTripleQuoteRegex)]
+  tripleQuoteMatches.forEach(match => {
+    const [fullMatch, agent, prompt] = match
+    const normalizedPrompt = normalizePrompt(prompt)
+    const key = `${index}:${agent.trim()}:${normalizedPrompt}`
+    if (!processedKeys.has(key)) {
+      processedKeys.add(key)
+      const output = previews[key]
+      if (output) {
+        processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, output))
+      } else {
+        processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, `🤖 ${agent.trim()}: thinking…`))
+      }
+    }
+  })
+
+  // Process unquoted multiline
+  const multilineMatches = [...processedBlock.matchAll(aiMultilineRegex)]
+  multilineMatches.forEach(match => {
+    const [fullMatch, agent, prompt] = match
+    const key = `${index}:${agent.trim()}:${normalizePrompt(prompt)}`
+    if (!processedKeys.has(key)) {
+      processedKeys.add(key)
+      const output = previews[key]
+      if (output) {
+        processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, output))
+      } else {
+        processedBlock = processedBlock.replace(fullMatch, formatResponse(agent, `🤖 ${agent.trim()}: thinking…`))
+      }
+    }
+  })
+
+  // Process single line
+  processedBlock = processedBlock.replace(aiSingleRegex, (match, agent: string, prompt: string) => {
+    const key = `${index}:${agent.trim()}:${normalizePrompt(prompt)}`
+    if (processedKeys.has(key)) {
+      return match
+    }
+    const output = previews[key]
+    if (output) {
+      return formatResponse(agent, output)
+    } else {
+      return formatResponse(agent, `🤖 ${agent.trim()}: thinking…`)
+    }
+  })
+
+  // Process images
+  processedBlock = processedBlock.replace(aiImageRegex, (_, agent: string, prompt: string) => {
+    const key = `image:${index}:${agent}:${normalizePrompt(prompt)}`
+    const output = previews[key]
+    // Check if it's a URL or data URL
+    const isUrl = output && typeof output === 'string' && output.startsWith('/api/media')
+    const isDataUrl = output && typeof output === 'string' && output.startsWith('data:image') && output.length > 100
+    if (isUrl || isDataUrl) {
+      return `\n![Generated by ${agent}](${output})\n`
+    }
+    return `\n🖼️ **${agent}**: generating image...\n`
+  })
+
+  // Process speech
+  processedBlock = processedBlock.replace(aiSpeechRegex, (_, agent: string, prompt: string) => {
+    const key = `speech:${index}:${agent}:${normalizePrompt(prompt)}`
+    const output = previews[key]
+    // Check if it's a URL or data URL
+    const isUrl = output && typeof output === 'string' && output.startsWith('/api/media')
+    const isDataUrl = output && typeof output === 'string' && (output.startsWith('data:audio') || output.startsWith('data:audio/')) && output.length > 100
+    if (isUrl || isDataUrl) {
+      const mimeType = isDataUrl && output.match(/^data:([^;]+)/) ? output.match(/^data:([^;]+)/)?.[1] || 'audio/mpeg' : 'audio/mpeg'
+      return `\n<audio controls><source src="${output}" type="${mimeType}">Your browser does not support the audio element.</audio>\n`
+    }
+    return `\n🎤 **${agent}**: generating speech...\n`
+  })
+
+  // Keep define inputs and intent buttons - they'll be rendered as custom components
+  // We'll replace them with custom HTML elements that ReactMarkdown will handle
+
+  return processedBlock
+}
+
+type PlaygroundViewerProps = {
+  markdown: string
+  previews?: Record<string, string> | null
+}
+
+const encodeDataAttribute = (value: string) => {
+  return encodeURIComponent(value)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+const decodeDataAttribute = (value: unknown) => {
+  if (typeof value !== 'string') {
+    return ''
+  }
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return ''
+  }
+}
+
+const getDataAttribute = (props: any, name: string) => {
+  if (!props) {
+    return undefined
+  }
+  const direct = props[name]
+  if (direct !== undefined) {
+    return Array.isArray(direct) ? direct[0] : direct
+  }
+  const nodeProps = props?.node?.properties
+  if (nodeProps && nodeProps[name] !== undefined) {
+    const value = nodeProps[name]
+    return Array.isArray(value) ? value[0] : value
+  }
+  return undefined
+}
+
+export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerProps) => {
+  const [intentStates, setIntentStates] = useState<Record<string, { status: 'idle' | 'loading' | 'success' | 'error'; response?: string; error?: string }>>({})
+  const [userDefines, setUserDefines] = useState<Record<string, string>>({})
+
+  const handleIntentTrigger = useCallback(async (key: string, agent: string, prompt: string) => {
+    setIntentStates(prev => ({ ...prev, [key]: { status: 'loading' } }))
+    
+    try {
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'text',
+          bot: agent,
+          prompt: prompt,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`)
+      }
+
+      const payload: { content?: string; error?: string } = await response.json()
+      
+      if (payload.error) {
+        setIntentStates(prev => ({ ...prev, [key]: { status: 'error', error: payload.error } }))
+      } else {
+        const content = payload.content?.trim() || '(no response)'
+        setIntentStates(prev => ({ ...prev, [key]: { status: 'success', response: content } }))
+      }
+    } catch (error) {
+      setIntentStates(prev => ({ 
+        ...prev, 
+        [key]: { 
+          status: 'error', 
+          error: error instanceof Error ? error.message : 'Failed to generate response' 
+        } 
+      }))
+    }
+  }, [])
+
+  const handleDefineChange = useCallback((key: string, value: string) => {
+    setUserDefines(prev => ({ ...prev, [key]: value }))
+  }, [])
+
+  const processBlockWithDefines = (block: string, index: number, previews: Record<string, string>, userDefines: Record<string, string>): string => {
+    let processed = processBlock(block, index, previews)
+    
+    // Process define inputs - replace with custom HTML element
+    processed = processed.replace(defineRegex, (_, name: string, label: string) => {
+      const key = `define:${index}:${name}`
+      const defaultValue = '' // We don't have agent definitions in viewer
+      const currentValue = userDefines[key] || defaultValue
+      const keyAttr = encodeDataAttribute(key)
+      const nameAttr = encodeDataAttribute(name.trim())
+      const labelAttr = encodeDataAttribute(label.trim())
+      const defaultValueAttr = encodeDataAttribute(defaultValue)
+      const currentValueAttr = encodeDataAttribute(currentValue)
+      return `\n<define-input data-key="${keyAttr}" data-name="${nameAttr}" data-label="${labelAttr}" data-default="${defaultValueAttr}" data-value="${currentValueAttr}"></define-input>\n`
+    })
+
+    // Process intent buttons - replace with custom HTML element
+    processed = processed.replace(intentRegex, (_, agent: string, buttonText: string, prompt: string) => {
+      const normalizedAgent = agent.trim()
+      const normalizedButtonText = buttonText.trim()
+      const normalizedPrompt = prompt.trim()
+      const promptKey = normalizePrompt(normalizedPrompt)
+      const key = `${index}:${normalizedAgent}:${promptKey}`
+      
+      const keyAttr = encodeDataAttribute(key)
+      const agentAttr = encodeDataAttribute(normalizedAgent)
+      const buttonTextAttr = encodeDataAttribute(normalizedButtonText)
+      const promptAttr = encodeDataAttribute(normalizedPrompt)
+
+      return `\n<intent-button data-key="${keyAttr}" data-agent="${agentAttr}" data-button-text="${buttonTextAttr}" data-prompt="${promptAttr}"></intent-button>\n`
+    })
+
+    return processed
+  }
+
+  const blocks = splitMarkdownBlocks(markdown)
+  const processedBlocks = blocks.map((block, index) => processBlockWithDefines(block, index, previews || {}, userDefines))
+  const processedMarkdown = processedBlocks.filter(block => block.trim().length > 0).join('\n\n')
+
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[rehypeRaw]}
+      components={{
+        img({ src, alt, ...props }: any) {
+          if (!src || typeof src !== 'string' || src.trim() === '') {
+            return null
+          }
+          if (src.startsWith('data:image')) {
+            if (src.length < 100) {
+              return null
+            }
+          }
+          return (
+            <img
+              src={src}
+              alt={alt || 'Generated image'}
+              className="rounded-lg border border-white/10 max-w-full"
+              {...props}
+            />
+          )
+        },
+        audio({ src, ...props }: any) {
+          if (!src || typeof src !== 'string') {
+            return null
+          }
+          return (
+            <audio controls className="w-full rounded-lg border border-white/10" {...props}>
+              <source src={src} type="audio/mpeg" />
+              Your browser does not support the audio element.
+            </audio>
+          )
+        },
+        p({ node, children, ...props }: any) {
+          const hasCustomElement = Array.isArray(node?.children)
+            ? node.children.some((child: any) => 
+                child?.tagName === 'intent-button' || child?.tagName === 'define-input'
+              )
+            : false
+          if (hasCustomElement) {
+            const { className, ...rest } = props
+            return (
+              <div {...rest} className={className}>
+                {children}
+              </div>
+            )
+          }
+          return (
+            <p {...props}>
+              {children}
+            </p>
+          )
+        },
+        ['intent-button']: (props: any) => {
+          const keyAttr = getDataAttribute(props, 'data-key')
+          const agentAttr = getDataAttribute(props, 'data-agent')
+          const buttonTextAttr = getDataAttribute(props, 'data-button-text')
+          const promptAttr = getDataAttribute(props, 'data-prompt')
+
+          if (!keyAttr || !agentAttr || !buttonTextAttr || !promptAttr) {
+            return null
+          }
+
+          const key = decodeDataAttribute(keyAttr)
+          const agent = decodeDataAttribute(agentAttr)
+          const buttonText = decodeDataAttribute(buttonTextAttr)
+          const prompt = decodeDataAttribute(promptAttr)
+          const state = intentStates[key] || { status: 'idle' as const }
+
+          const handleClick = () => {
+            if (state.status === 'loading') {
+              return
+            }
+            handleIntentTrigger(key, agent, prompt)
+          }
+
+          return (
+            <div className="mt-3 flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={handleClick}
+                disabled={state.status === 'loading'}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-violet-500/40 bg-violet-500/10 px-6 py-3 text-sm font-semibold text-violet-100 transition hover:border-violet-400 hover:bg-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {state.status === 'loading' ? 'Running…' : buttonText}
+              </button>
+              {state.status === 'error' && state.error ? (
+                <p className="text-xs text-rose-400">{state.error}</p>
+              ) : null}
+              {state.status === 'success' && state.response ? (
+                <div className="rounded-lg border border-white/10 bg-black/40 p-3 text-sm text-neutral-200">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    rehypePlugins={[rehypeRaw]}
+                    components={{
+                      img({ src, alt, ...props }: any) {
+                        if (!src || typeof src !== 'string' || src.trim() === '') {
+                          return null
+                        }
+                        if (src.startsWith('data:image')) {
+                          if (src.length < 100) {
+                            return null
+                          }
+                        }
+                        return (
+                          <img
+                            src={src}
+                            alt={alt || 'Generated image'}
+                            className="rounded-lg border border-white/10 max-w-full"
+                            {...props}
+                          />
+                        )
+                      },
+                    }}
+                  >
+                    {state.response}
+                  </ReactMarkdown>
+                </div>
+              ) : null}
+            </div>
+          )
+        },
+        ['define-input']: (props: any) => {
+          const keyAttr = getDataAttribute(props, 'data-key')
+          const nameAttr = getDataAttribute(props, 'data-name')
+          const labelAttr = getDataAttribute(props, 'data-label')
+          const defaultValueAttr = getDataAttribute(props, 'data-default')
+          const currentValueAttr = getDataAttribute(props, 'data-value')
+
+          if (!keyAttr || !nameAttr || !labelAttr) {
+            return null
+          }
+
+          const key = decodeDataAttribute(keyAttr)
+          const name = decodeDataAttribute(nameAttr)
+          const label = decodeDataAttribute(labelAttr)
+          const defaultValue = decodeDataAttribute(defaultValueAttr)
+          const currentValue = userDefines[key] || decodeDataAttribute(currentValueAttr) || defaultValue
+
+          const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+            handleDefineChange(key, e.target.value)
+          }
+
+          return (
+            <div className="my-3 flex flex-col gap-2">
+              <label className="text-sm font-semibold text-neutral-300">
+                {label}
+              </label>
+              <input
+                type="text"
+                value={currentValue}
+                onChange={handleChange}
+                placeholder={defaultValue || `Enter ${name}`}
+                className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-2 font-mono text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-violet-400 focus:outline-none"
+              />
+            </div>
+          )
+        },
+      } as Components}
+    >
+      {processedMarkdown}
+    </ReactMarkdown>
+  )
+}
+

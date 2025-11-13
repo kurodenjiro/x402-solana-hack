@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateText, experimental_generateImage as generateImage, experimental_generateSpeech as generateSpeech, type ToolSet } from 'ai'
 import { createOpenAI } from '@ai-sdk/openai'
 import { experimental_createMCPClient } from '@ai-sdk/mcp'
+import { prisma } from '@/lib/prisma'
 
 type ToolConfig = {
   name: string
@@ -12,6 +13,8 @@ type GenerateRequest = {
   type?: 'text' | 'image' | 'speech'
   bot?: string
   prompt?: string
+  key?: string // Preview key for storing media assets
+  playgroundId?: string // Optional playground ID for linking media assets
   config?: {
     signature?: string
     tool?: ToolConfig
@@ -62,6 +65,8 @@ export async function POST(request: Request) {
     const call = body.calls?.[0]
     const bot = call?.bot ?? body.bot
     const prompt = call?.prompt ?? body.prompt
+    const key = body.key // Preview key for media assets
+    const playgroundId = body.playgroundId // Optional playground ID
     const config = call
       ? {
           signature: call.signature,
@@ -86,8 +91,6 @@ export async function POST(request: Request) {
         const images = result.images
         if (images && images.length > 0) {
           const image = images[0]
-          // Convert to base64 data URL
-          // The image object should have base64 property
           const base64 = image.base64
           if (!base64) {
             console.error('Image generated but no base64 data found', { image: Object.keys(image) })
@@ -102,6 +105,60 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Generated image data is incomplete.' }, { status: 500 })
           }
 
+          // Store media asset in database and get URL
+          if (key) {
+            try {
+              // Convert base64 data URL to Buffer
+              const base64Data = base64
+              const buffer = Buffer.from(base64Data, 'base64')
+
+              // Generate unique URL path
+              const url = `/api/media/${key.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.png`
+
+              // Check if asset already exists with this key
+              // If playgroundId exists, check by playgroundId and key, otherwise just by key
+              const existing = playgroundId
+                ? await prisma.mediaAsset.findFirst({
+                    where: { playgroundId, key },
+                  })
+                : await prisma.mediaAsset.findFirst({
+                    where: { key, playgroundId: null },
+                  })
+
+              let asset
+              if (existing) {
+                // Update existing asset
+                asset = await prisma.mediaAsset.update({
+                  where: { id: existing.id },
+                  data: {
+                    data: buffer,
+                    mimeType: mediaType,
+                    url,
+                    // Update playgroundId if it was null and now we have one
+                    ...(playgroundId && !existing.playgroundId ? { playgroundId } : {}),
+                  },
+                })
+              } else {
+                // Create new asset (playgroundId can be null if playground doesn't exist yet)
+                asset = await prisma.mediaAsset.create({
+                  data: {
+                    playgroundId: playgroundId || null,
+                    key,
+                    type: 'image',
+                    mimeType: mediaType,
+                    data: buffer,
+                    url,
+                  },
+                })
+              }
+
+              return NextResponse.json({ image: asset.url })
+            } catch (error) {
+              console.error('Error storing media asset, falling back to data URL', error)
+            }
+          }
+
+          // Fallback to data URL if storage fails or key not provided
           return NextResponse.json({ image: dataUrl })
         }
 
@@ -124,7 +181,6 @@ export async function POST(request: Request) {
 
         const audio = result.audio
         if (audio && audio.base64) {
-          // Convert to base64 data URL
           // Map format to MIME type
           const format = audio.format || 'mp3'
           const mimeTypeMap: Record<string, string> = {
@@ -142,6 +198,60 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Generated audio data is incomplete.' }, { status: 500 })
           }
 
+          // Store media asset in database and get URL
+          if (key) {
+            try {
+              // Convert base64 data to Buffer
+              const base64Data = audio.base64
+              const buffer = Buffer.from(base64Data, 'base64')
+
+              // Generate unique URL path
+              const url = `/api/media/${key.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.${format.toLowerCase()}`
+
+              // Check if asset already exists with this key
+              // If playgroundId exists, check by playgroundId and key, otherwise just by key
+              const existing = playgroundId
+                ? await prisma.mediaAsset.findFirst({
+                    where: { playgroundId, key },
+                  })
+                : await prisma.mediaAsset.findFirst({
+                    where: { key, playgroundId: null },
+                  })
+
+              let asset
+              if (existing) {
+                // Update existing asset
+                asset = await prisma.mediaAsset.update({
+                  where: { id: existing.id },
+                  data: {
+                    data: buffer,
+                    mimeType: mediaType,
+                    url,
+                    // Update playgroundId if it was null and now we have one
+                    ...(playgroundId && !existing.playgroundId ? { playgroundId } : {}),
+                  },
+                })
+              } else {
+                // Create new asset (playgroundId can be null if playground doesn't exist yet)
+                asset = await prisma.mediaAsset.create({
+                  data: {
+                    playgroundId: playgroundId || null,
+                    key,
+                    type: 'audio',
+                    mimeType: mediaType,
+                    data: buffer,
+                    url,
+                  },
+                })
+              }
+
+              return NextResponse.json({ audio: asset.url })
+            } catch (error) {
+              console.error('Error storing media asset, falling back to data URL', error)
+            }
+          }
+
+          // Fallback to data URL if storage fails or key not provided
           return NextResponse.json({ audio: dataUrl })
         }
 

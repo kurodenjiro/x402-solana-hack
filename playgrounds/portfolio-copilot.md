@@ -18,12 +18,12 @@ network: solana-devnet
 ## 🧠 Capabilities
 
 - `@arg[Wallet]:String` (Primary wallet to analyze)
-- `@ai[BalanceSummarizer]("gpt-4o-mini",[SolanaMCP,SolanaBalanceTool])`
-- `@mcp[SolanaMCP]("https://mcp.solana.com/mcp")`
+- `@ai[BalanceSummarizer](gpt-4o-mini,[SolanaMCP,SolanaBalanceTool])`
+- `@mcp[SolanaMCP](https://mcp.solana.com/mcp)`
 
 ## 🛠️ Workflow
 
 1. Fetch balances for {Wallet}
 2. Group positions by protocol
-3. Generate recommendations via ~ai[BalanceSummarizer]("Summarize risks and opportunities")
+3. Generate recommendations via ~ai[BalanceSummarizer](Summarize risks and opportunities)
 

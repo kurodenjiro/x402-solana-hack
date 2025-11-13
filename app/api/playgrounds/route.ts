@@ -1,10 +1,12 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/lib/prisma'
 
 const playgroundSchema = z.object({
   markdown: z.string().min(10),
+  previews: z.record(z.string()).optional(),
   publisherAddress: z.string().optional(),
 })
 
@@ -77,6 +79,7 @@ export async function POST(req: Request) {
   }
 
   const markdown = parsed.data.markdown
+  const previews = parsed.data.previews || {}
   const publisherAddress = parsed.data.publisherAddress || null
   const title = extractTitle(markdown)
   const summary = extractSummary(markdown)
@@ -89,6 +92,7 @@ export async function POST(req: Request) {
       title,
       summary,
       markdown,
+      previews: previews as Prisma.JsonValue,
       tags: [],
       price: null,
       network: 'solana-devnet',
@@ -101,6 +105,7 @@ export async function POST(req: Request) {
       title,
       summary,
       markdown,
+      previews: previews as Prisma.JsonValue,
       tags: [],
       price: null,
       network: 'solana-devnet',
@@ -116,8 +121,31 @@ export async function POST(req: Request) {
       where: { id: record.id },
       data: { resourcePath: desiredResourcePath },
     })
+    
+    // Link any orphaned media assets (with null playgroundId) to this playground
+    await prisma.mediaAsset.updateMany({
+      where: {
+        playgroundId: null,
+        key: { in: Object.keys(previews || {}) },
+      },
+      data: {
+        playgroundId: updated.id,
+      },
+    })
+    
     return NextResponse.json(updated, { status: 201 })
   }
+
+  // Link any orphaned media assets (with null playgroundId) to this playground
+  await prisma.mediaAsset.updateMany({
+    where: {
+      playgroundId: null,
+      key: { in: Object.keys(previews || {}) },
+    },
+    data: {
+      playgroundId: record.id,
+    },
+  })
 
   return NextResponse.json(record, { status: 201 })
 }

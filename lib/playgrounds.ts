@@ -10,6 +10,7 @@ export type PlaygroundPayload = {
   title: string
   summary: string
   markdown: string
+  previews?: Record<string, string> | null
   tags: string[]
   price?: string | null
   network: string
