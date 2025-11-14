@@ -874,6 +874,7 @@ export const PlaygroundEditor = ({ initial, playgroundId, onChange }: Playground
   const [intentStates, setIntentStates] = useState<Record<string, IntentState>>({})
   const [userDefines, setUserDefines] = useState<Record<string, string>>({})
   const [isGenerating, setIsGenerating] = useState(false)
+  const prevMarkdownRef = useRef<string>(markdown)
 
   // Extract define calls and initialize userDefines
   const defineCalls = useMemo(() => {
@@ -921,6 +922,70 @@ export const PlaygroundEditor = ({ initial, playgroundId, onChange }: Playground
     })
     return map
   }, [defineCalls])
+
+  // Clear previews for specific AI calls that changed
+  const clearChangedPreviews = useCallback((oldMarkdown: string, newMarkdown: string) => {
+    const oldBlocks = splitMarkdownBlocks(oldMarkdown)
+    const newBlocks = splitMarkdownBlocks(newMarkdown)
+    
+    // Extract all AI calls from old and new markdown
+    // Use a composite key: blockIndex:callType:agent to identify calls
+    const oldCalls = new Map<string, { key: string; prompt: string; blockIndex: number; callType: string }>()
+    const newCalls = new Map<string, { key: string; prompt: string; blockIndex: number; callType: string }>()
+    
+    oldBlocks.forEach((block, index) => {
+      extractAiCalls(block, index, agentDefinitions, userDefines, defineNameMap).forEach(call => {
+        const callType = call.isImage ? 'image' : call.isSpeech ? 'speech' : 'text'
+        const positionKey = `${index}:${callType}:${call.agent}`
+        oldCalls.set(positionKey, { key: call.key, prompt: call.prompt, blockIndex: index, callType })
+      })
+    })
+    
+    newBlocks.forEach((block, index) => {
+      extractAiCalls(block, index, agentDefinitions, userDefines, defineNameMap).forEach(call => {
+        const callType = call.isImage ? 'image' : call.isSpeech ? 'speech' : 'text'
+        const positionKey = `${index}:${callType}:${call.agent}`
+        newCalls.set(positionKey, { key: call.key, prompt: call.prompt, blockIndex: index, callType })
+      })
+    })
+    
+    // Find changed calls (same position and agent, but different prompt/key)
+    const changedKeys = new Set<string>()
+    
+    newCalls.forEach((newCall, positionKey) => {
+      const oldCall = oldCalls.get(positionKey)
+      if (oldCall && oldCall.key !== newCall.key) {
+        // The prompt changed, so the key changed - clear the old preview
+        changedKeys.add(newCall.key)
+        // Also clear the old key if it still exists
+        if (previewRef.current[oldCall.key]) {
+          delete previewRef.current[oldCall.key]
+        }
+      }
+    })
+    
+    // Also check for new calls (not in old)
+    newCalls.forEach((newCall, positionKey) => {
+      if (!oldCalls.has(positionKey)) {
+        changedKeys.add(newCall.key)
+      }
+    })
+    
+    // Clear only the changed previews
+    if (changedKeys.size > 0) {
+      setPreviewMap(prev => {
+        const updated = { ...prev }
+        changedKeys.forEach(key => {
+          delete updated[key]
+        })
+        return updated
+      })
+      
+      changedKeys.forEach(key => {
+        delete previewRef.current[key]
+      })
+    }
+  }, [agentDefinitions, userDefines, defineNameMap])
 
   const handleDefineChange = useCallback((key: string, value: string) => {
     setUserDefines(prev => {
@@ -1221,11 +1286,16 @@ export const PlaygroundEditor = ({ initial, playgroundId, onChange }: Playground
 
   const handleMarkdownChange = useCallback(
     (value: string) => {
-      resetPreviews()
+      const oldMarkdown = prevMarkdownRef.current
+      prevMarkdownRef.current = value
+      
+      // Only clear previews for changed AI calls, not all of them
+      clearChangedPreviews(oldMarkdown, value)
+      
       setMarkdown(value)
       onChange?.({ markdown: value, blocks: splitMarkdownBlocks(value), previews: previewRef.current, isGenerating })
     },
-    [onChange, resetPreviews, isGenerating],
+    [onChange, clearChangedPreviews, isGenerating],
   )
 
   useEffect(() => {

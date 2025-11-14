@@ -145,7 +145,7 @@ const processBlock = (block: string, index: number, previews: Record<string, str
     return `\n🖼️ **${agent}**: generating image...\n`
   })
 
-  // Process speech
+  // Process speech - use custom element like in editor
   processedBlock = processedBlock.replace(aiSpeechRegex, (_, agent: string, prompt: string) => {
     const key = `speech:${index}:${agent}:${normalizePrompt(prompt)}`
     const output = previews[key]
@@ -153,8 +153,10 @@ const processBlock = (block: string, index: number, previews: Record<string, str
     const isUrl = output && typeof output === 'string' && output.startsWith('/api/media')
     const isDataUrl = output && typeof output === 'string' && (output.startsWith('data:audio') || output.startsWith('data:audio/')) && output.length > 100
     if (isUrl || isDataUrl) {
-      const mimeType = isDataUrl && output.match(/^data:([^;]+)/) ? output.match(/^data:([^;]+)/)?.[1] || 'audio/mpeg' : 'audio/mpeg'
-      return `\n<audio controls><source src="${output}" type="${mimeType}">Your browser does not support the audio element.</audio>\n`
+      const keyAttr = encodeDataAttribute(key)
+      const agentAttr = encodeDataAttribute(agent.trim())
+      const audioDataAttr = encodeDataAttribute(output)
+      return `\n<ai-speech data-key="${keyAttr}" data-agent="${agentAttr}" data-audio="${audioDataAttr}"></ai-speech>\n`
     }
     return `\n🎤 **${agent}**: generating speech...\n`
   })
@@ -287,7 +289,9 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
   }
 
   const blocks = splitMarkdownBlocks(markdown)
-  const processedBlocks = blocks.map((block, index) => processBlockWithDefines(block, index, previews || {}, userDefines))
+  // Filter out agent definition blocks (::: ... :::)
+  const filteredBlocks = blocks.filter(block => !parseAgentDefinitionBlock(block))
+  const processedBlocks = filteredBlocks.map((block, index) => processBlockWithDefines(block, index, previews || {}, userDefines))
   const processedMarkdown = processedBlocks.filter(block => block.trim().length > 0).join('\n\n')
 
   return (
@@ -313,21 +317,54 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
             />
           )
         },
-        audio({ src, ...props }: any) {
-          if (!src || typeof src !== 'string') {
-            return null
+        ['ai-speech']: (props: any) => {
+          const keyAttr = getDataAttribute(props, 'data-key')
+          const agentAttr = getDataAttribute(props, 'data-agent')
+          const audioDataAttr = getDataAttribute(props, 'data-audio')
+
+          if (!keyAttr || !agentAttr || !audioDataAttr) {
+            return (
+              <div className="my-3 text-sm text-neutral-400">
+                🎤 <strong>{agentAttr ? decodeDataAttribute(agentAttr) : 'Unknown'}</strong>: generating speech...
+              </div>
+            )
           }
+
+          const audioData = decodeDataAttribute(audioDataAttr)
+          const agent = decodeDataAttribute(agentAttr)
+
+          // Check if it's a URL or data URL
+          const isUrl = audioData && typeof audioData === 'string' && audioData.startsWith('/api/media')
+          const isDataUrl = audioData && typeof audioData === 'string' && (audioData.startsWith('data:audio') || audioData.startsWith('data:audio/')) && audioData.length > 100
+
+          if (!isUrl && !isDataUrl) {
+            return (
+              <div className="my-3 text-sm text-neutral-400">
+                🎤 <strong>{agent}</strong>: generating speech...
+              </div>
+            )
+          }
+
+          // Extract MIME type from data URL if needed
+          let mimeType = 'audio/mpeg'
+          if (isDataUrl) {
+            const mimeTypeMatch = audioData.match(/^data:([^;]+)/)
+            mimeType = mimeTypeMatch ? mimeTypeMatch[1] : 'audio/mpeg'
+          }
+
           return (
-            <audio controls className="w-full rounded-lg border border-white/10" {...props}>
-              <source src={src} type="audio/mpeg" />
-              Your browser does not support the audio element.
-            </audio>
+            <div className="my-3">
+              <audio controls className="w-full rounded-lg border border-white/10">
+                <source src={audioData} type={mimeType} />
+                Your browser does not support the audio element.
+              </audio>
+            </div>
           )
         },
         p({ node, children, ...props }: any) {
           const hasCustomElement = Array.isArray(node?.children)
             ? node.children.some((child: any) => 
-                child?.tagName === 'intent-button' || child?.tagName === 'define-input'
+                child?.tagName === 'intent-button' || child?.tagName === 'define-input' || child?.tagName === 'ai-speech'
               )
             : false
           if (hasCustomElement) {

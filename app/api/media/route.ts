@@ -32,11 +32,14 @@ export async function POST(request: Request) {
     const url = `/api/media/${key.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.${type === 'image' ? 'png' : type === 'audio' ? 'mp3' : 'mp4'}`
 
     // Check if asset already exists with this key
+    // If playgroundId exists, check by playgroundId and key, otherwise just by key
     const existing = playgroundId
       ? await prisma.mediaAsset.findFirst({
           where: { playgroundId, key },
         })
-      : null
+      : await prisma.mediaAsset.findFirst({
+          where: { key, playgroundId: null },
+        })
 
     if (existing) {
       // Update existing asset
@@ -46,6 +49,8 @@ export async function POST(request: Request) {
           data: buffer,
           mimeType,
           url,
+          // Update playgroundId if it was null and now we have one
+          ...(playgroundId && !existing.playgroundId ? { playgroundId } : {}),
         },
       })
       return NextResponse.json({ url: updated.url, id: updated.id })
@@ -54,7 +59,7 @@ export async function POST(request: Request) {
     // Create new asset
     const asset = await prisma.mediaAsset.create({
       data: {
-        playgroundId: playgroundId || '', // Will be updated when playground is saved
+        playgroundId: playgroundId || null, // Nullable - will be updated when playground is saved
         key,
         type,
         mimeType,
