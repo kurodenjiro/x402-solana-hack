@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -60,6 +60,27 @@ const splitMarkdownBlocks = (markdown: string): string[] => {
 
 const parseAgentDefinitionBlock = (block: string): boolean => {
   return agentDefineRegex.test(block.trim())
+}
+
+// Extract default values from @define in agent definition blocks
+const extractDefineDefaults = (markdown: string): Record<string, string> => {
+  const defaults: Record<string, string> = {}
+  const blocks = splitMarkdownBlocks(markdown)
+  
+  blocks.forEach((block, index) => {
+    if (parseAgentDefinitionBlock(block)) {
+      // Extract @define[Name](defaultValue) from agent definition block
+      const defineMatches = [...block.matchAll(/@define\[([^\]]+)\]\(([^)]+)\)/g)]
+      defineMatches.forEach(match => {
+        const [, name, defaultValue] = match
+        const normalizedName = name.trim()
+        // Store by name (without index) so it can be matched later
+        defaults[normalizedName] = defaultValue.trim()
+      })
+    }
+  })
+  
+  return defaults
 }
 
 const formatResponse = (agent: string, response: string) => {
@@ -136,6 +157,7 @@ const processBlock = (block: string, index: number, previews: Record<string, str
   processedBlock = processedBlock.replace(aiImageRegex, (_, agent: string, prompt: string) => {
     const key = `image:${index}:${agent}:${normalizePrompt(prompt)}`
     const output = previews[key]
+    console.log(`[PlaygroundViewer] Image lookup - key: "${key}", found: ${!!output}, isUrl: ${output?.startsWith('/api/media')}, isDataUrl: ${output?.startsWith('data:image')}`)
     // Check if it's a URL or data URL
     const isUrl = output && typeof output === 'string' && output.startsWith('/api/media')
     const isDataUrl = output && typeof output === 'string' && output.startsWith('data:image') && output.length > 100
@@ -149,6 +171,7 @@ const processBlock = (block: string, index: number, previews: Record<string, str
   processedBlock = processedBlock.replace(aiSpeechRegex, (_, agent: string, prompt: string) => {
     const key = `speech:${index}:${agent}:${normalizePrompt(prompt)}`
     const output = previews[key]
+    console.log(`[PlaygroundViewer] Speech lookup - key: "${key}", found: ${!!output}, isUrl: ${output?.startsWith('/api/media')}, isDataUrl: ${output?.startsWith('data:audio')}`)
     // Check if it's a URL or data URL
     const isUrl = output && typeof output === 'string' && output.startsWith('/api/media')
     const isDataUrl = output && typeof output === 'string' && (output.startsWith('data:audio') || output.startsWith('data:audio/')) && output.length > 100
@@ -209,6 +232,25 @@ const getDataAttribute = (props: any, name: string) => {
 }
 
 export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerProps) => {
+  // Extract default values from @define in agent definition blocks
+  const defineDefaults = useMemo(() => extractDefineDefaults(markdown), [markdown])
+  
+  // Debug: Log previews on mount to verify they're being passed correctly
+  useEffect(() => {
+    if (Object.keys(previews || {}).length > 0) {
+      console.log('[PlaygroundViewer] Loaded with previews:', {
+        total: Object.keys(previews || {}).length,
+        imageKeys: Object.keys(previews || {}).filter(k => k.startsWith('image:')),
+        speechKeys: Object.keys(previews || {}).filter(k => k.startsWith('speech:')),
+        samplePreviews: Object.entries(previews || {}).slice(0, 3).map(([k, v]) => ({ 
+          key: k, 
+          value: typeof v === 'string' ? (v.startsWith('/api/media') ? v : v.substring(0, 50) + '...') : v 
+        }))
+      })
+    }
+    console.log('[PlaygroundViewer] Define defaults:', defineDefaults)
+  }, [previews, defineDefaults])
+
   const [intentStates, setIntentStates] = useState<Record<string, { status: 'idle' | 'loading' | 'success' | 'error'; response?: string; error?: string }>>({})
   const [userDefines, setUserDefines] = useState<Record<string, string>>({})
 
@@ -253,13 +295,15 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
     setUserDefines(prev => ({ ...prev, [key]: value }))
   }, [])
 
-  const processBlockWithDefines = (block: string, index: number, previews: Record<string, string>, userDefines: Record<string, string>): string => {
+  const processBlockWithDefines = (block: string, index: number, previews: Record<string, string>, userDefines: Record<string, string>, defineDefaults: Record<string, string>): string => {
     let processed = processBlock(block, index, previews)
     
     // Process define inputs - replace with custom HTML element
     processed = processed.replace(defineRegex, (_, name: string, label: string) => {
       const key = `define:${index}:${name}`
-      const defaultValue = '' // We don't have agent definitions in viewer
+      const normalizedName = name.trim()
+      // Get default value from agent definitions (extracted from @define in ::: block)
+      const defaultValue = defineDefaults[normalizedName] || ''
       const currentValue = userDefines[key] || defaultValue
       const keyAttr = encodeDataAttribute(key)
       const nameAttr = encodeDataAttribute(name.trim())
@@ -289,9 +333,15 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
   }
 
   const blocks = splitMarkdownBlocks(markdown)
-  // Filter out agent definition blocks (::: ... :::)
-  const filteredBlocks = blocks.filter(block => !parseAgentDefinitionBlock(block))
-  const processedBlocks = filteredBlocks.map((block, index) => processBlockWithDefines(block, index, previews || {}, userDefines))
+  // Process blocks with their original indices (don't filter before processing)
+  // This ensures preview keys match what was saved (which includes agent definition blocks in the index)
+  const processedBlocks = blocks.map((block, originalIndex) => {
+    // Skip agent definition blocks in rendering, but use original index for preview lookup
+    if (parseAgentDefinitionBlock(block)) {
+      return ''
+    }
+    return processBlockWithDefines(block, originalIndex, previews || {}, userDefines, defineDefaults)
+  })
   const processedMarkdown = processedBlocks.filter(block => block.trim().length > 0).join('\n\n')
 
   return (

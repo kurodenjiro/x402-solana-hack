@@ -45,9 +45,11 @@ export default async function PlaygroundDetailPage({ params }: PlaygroundPagePro
       <section className="surface-panel prose prose-invert max-w-none p-8">
         <PlaygroundViewer 
           markdown={playground.markdown} 
-          previews={playground.previews && typeof playground.previews === 'object' 
-            ? playground.previews as Record<string, string>
-            : undefined} 
+          previews={
+            playground.previews && typeof playground.previews === 'object' && !Array.isArray(playground.previews)
+              ? (playground.previews as Record<string, string>)
+              : {}
+          } 
         />
       </section>
     </main>
