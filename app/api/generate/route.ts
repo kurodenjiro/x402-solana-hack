@@ -41,8 +41,18 @@ const extractEndpoint = (params: string) => {
   if (!params) {
     return null
   }
-  const match = params.match(/endpoint\s*:\s*["']([^"']+)["']/i)
-  return match ? match[1] : null
+  // First try to match endpoint: "url" format
+  const endpointMatch = params.match(/endpoint\s*:\s*["']([^"']+)["']/i)
+  if (endpointMatch) {
+    return endpointMatch[1]
+  }
+  // If no endpoint: prefix, assume the params is the URL itself
+  // Check if it looks like a URL (starts with http:// or https://)
+  const urlMatch = params.trim().match(/^https?:\/\/[^\s]+/i)
+  if (urlMatch) {
+    return urlMatch[0]
+  }
+  return null
 }
 
 export const runtime = 'nodejs'
@@ -143,12 +153,16 @@ export async function POST(request: Request) {
     })
 
     const mcpToolSets: ToolSet[] = []
+    console.log('[API Generate] MCP definitions received:', mcpDefinitions)
     for (const definition of mcpDefinitions) {
       const endpoint = extractEndpoint(definition.params)
+      console.log(`[API Generate] Processing MCP definition: ${definition.name}, params: ${definition.params}, extracted endpoint: ${endpoint}`)
       if (!endpoint) {
+        console.warn(`[API Generate] Could not extract endpoint from MCP definition: ${definition.name} with params: ${definition.params}`)
         continue
       }
       try {
+        console.log(`[API Generate] Creating MCP client for endpoint: ${endpoint}`)
         const client = await experimental_createMCPClient({
           transport: {
             type: 'http',
@@ -157,17 +171,26 @@ export async function POST(request: Request) {
         })
         mcpClients.push(client)
         const tools = (await client.tools()) as ToolSet
+        console.log(`[API Generate] MCP tools loaded from ${endpoint}:`, Object.keys(tools || {}).length, 'tools')
         if (tools && Object.keys(tools).length) {
           mcpToolSets.push(tools)
           configurationLines.push(`MCP Endpoint: ${endpoint}`)
+          // Add tool identifiers to configuration
+          Object.keys(tools).forEach(toolId => {
+            configurationLines.push(`MCP Tool: ${toolId}`)
+          })
+        } else {
+          console.warn(`[API Generate] No tools found from MCP endpoint: ${endpoint}`)
         }
       } catch (error) {
-        console.error(`Failed to load MCP tools from ${endpoint}`, error)
+        console.error(`[API Generate] Failed to load MCP tools from ${endpoint}`, error)
       }
     }
 
     const combinedTools: ToolSet | undefined =
       mcpToolSets.length > 0 ? (Object.assign({}, ...mcpToolSets) as ToolSet) : undefined
+    
+    console.log(`[API Generate] Total MCP tool sets: ${mcpToolSets.length}, Combined tools: ${combinedTools ? Object.keys(combinedTools).length : 0}`)
 
     const promptSegments = [
       `You are ${bot}, an AI assistant specialized for Solana Markdown playgrounds.`,
@@ -195,7 +218,6 @@ export async function POST(request: Request) {
       ...(combinedTools ? { tools: combinedTools, toolChoice: 'auto' as const } : {}),
       prompt: promptSegments.join('\n'),
     })
-
     return NextResponse.json({ content: text })
   } catch (error) {
     console.error('AI preview generation failed', error)

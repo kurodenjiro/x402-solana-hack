@@ -295,10 +295,6 @@ const starterBlocks = [
 :::`,
   '# Portfolio Copilot',
   '> A markdown-native agent that reads on-chain data, builds reports, and suggests next actions.',
-  '## 🧠 Capabilities',
-  '- `@arg[Wallet]:String` (Primary wallet to analyze)',
-  '- `@ai[BalanceSummarizer](gpt-4o-mini,[SolanaMCP,SolanaBalanceTool])`',
-  '- `@mcp[SolanaMCP](https://mcp.solana.com/mcp)`',
   `## 🛠️ Workflow
 1. Fetch balances for {Wallet}
 2. Group positions by protocol
@@ -313,8 +309,6 @@ Include:
 """)`,
   `~intent[BalanceSummarizer](<Summarize risks>,Summarize only the most at-risk positions for {Wallet} in one sentence.)`,
   `~define[Wallet](Wallet Address)`,
-  `~ai-image[ImageGenerator](A futuristic Solana blockchain visualization with neon colors)`,
-  `~ai-speech[VoiceGenerator](Welcome to the AI-native playground. This is a demonstration of text-to-speech generation.)`,
 ]
 
 // Updated regex patterns - supports both unquoted and triple-quoted syntax

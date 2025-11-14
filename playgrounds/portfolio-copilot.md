@@ -15,12 +15,6 @@ network: solana-devnet
 
 > A markdown-native agent that reads on-chain data, builds reports, and suggests next actions.
 
-## 🧠 Capabilities
-
-- `@arg[Wallet]:String` (Primary wallet to analyze)
-- `@ai[BalanceSummarizer](gpt-4o-mini,[SolanaMCP,SolanaBalanceTool])`
-- `@mcp[SolanaMCP](https://mcp.solana.com/mcp)`
-
 ## 🛠️ Workflow
 
 1. Fetch balances for {Wallet}

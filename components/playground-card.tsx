@@ -1,10 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import ReactMarkdown from 'react-markdown'
-import type { Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 
+import { PlaygroundViewer } from '@/components/playground-viewer'
 import type { PlaygroundPayload } from '@/lib/playgrounds'
 
 type PlaygroundCardProps = {
@@ -31,33 +29,14 @@ export const PlaygroundCard = ({ playground }: PlaygroundCardProps) => {
         </div>
       ) : null}
       <div className="prose prose-invert max-w-none text-sm text-neutral-200 prose-headings:text-white">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            img({ src, alt, ...props }: any) {
-              // Validate src is a non-empty string
-              if (!src || typeof src !== 'string' || src.trim() === '') {
-                return null
-              }
-              // For data URLs (generated images), ensure they're valid
-              if (src.startsWith('data:image')) {
-                if (src.length < 100) {
-                  return null
-                }
-              }
-              return (
-                <img
-                  src={src}
-                  alt={alt || 'Generated image'}
-                  className="rounded-lg border border-white/10 max-w-full"
-                  {...props}
-                />
-              )
-            },
-          } as Components}
-        >
-          {playground.markdown}
-        </ReactMarkdown>
+        <PlaygroundViewer 
+          markdown={playground.markdown} 
+          previews={
+            playground.previews && typeof playground.previews === 'object' && !Array.isArray(playground.previews)
+              ? (playground.previews as Record<string, string>)
+              : {}
+          } 
+        />
       </div>
       <footer className="flex items-center justify-between border-t border-white/10 pt-4">
         <Link
