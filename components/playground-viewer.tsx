@@ -18,6 +18,8 @@ const agentDefineRegex = /^:::\s*\n([\s\S]*?)\n:::\s*$/i
 
 const normalizePrompt = (prompt: string) => prompt.replace(/\r\n/g, '\n').trim()
 
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 const splitMarkdownBlocks = (markdown: string): string[] => {
   const lines = markdown.split('\n')
   const blocks: string[] = []
@@ -231,9 +233,79 @@ const getDataAttribute = (props: any, name: string) => {
   return undefined
 }
 
+// Parse agent definitions from markdown
+const parseAgentDefinitions = (markdown: string): Array<{ kind: string; name: string; params: string }> => {
+  const definitions: Array<{ kind: string; name: string; params: string }> = []
+  const blocks = splitMarkdownBlocks(markdown)
+  
+  blocks.forEach(block => {
+    if (parseAgentDefinitionBlock(block)) {
+      const match = agentDefineRegex.exec(block.trim())
+      if (match) {
+        const inner = match[1]
+        const lines = inner.split('\n')
+        
+        let i = 0
+        while (i < lines.length) {
+          const line = lines[i]?.trim()
+          if (!line || !line.startsWith('@')) {
+            i += 1
+            continue
+          }
+          
+          const headerMatch = line.match(/^@([^\[]+)\[([^\]]+)\]\(([^)]*)\)/)
+          if (headerMatch) {
+            const [, kindRaw, nameRaw, paramsRaw] = headerMatch
+            definitions.push({
+              kind: kindRaw.trim(),
+              name: nameRaw.trim(),
+              params: paramsRaw.trim(),
+            })
+          }
+          i += 1
+        }
+      }
+    }
+  })
+  
+  return definitions
+}
+
 export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerProps) => {
   // Extract default values from @define in agent definition blocks
   const defineDefaults = useMemo(() => extractDefineDefaults(markdown), [markdown])
+  
+  // Parse agent definitions for AI generation
+  const agentDefinitions = useMemo(() => parseAgentDefinitions(markdown), [markdown])
+  
+  // Extract MCP definitions
+  const mcpDefinitions = useMemo(
+    () => agentDefinitions.filter(def => def.kind.toLowerCase() === 'mcp'),
+    [agentDefinitions],
+  )
+  
+  // Extract define calls to build defineNameMap
+  const blocks = useMemo(() => splitMarkdownBlocks(markdown), [markdown])
+  const defineCalls = useMemo(() => {
+    const defines: Array<{ key: string; name: string }> = []
+    blocks.forEach((block, index) => {
+      const matches = [...block.matchAll(defineRegex)]
+      matches.forEach(match => {
+        const [, name] = match
+        const key = `define:${index}:${name.trim()}`
+        defines.push({ key, name: name.trim() })
+      })
+    })
+    return defines
+  }, [blocks])
+  
+  const defineNameMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    defineCalls.forEach(({ key, name }) => {
+      map[key] = name
+    })
+    return map
+  }, [defineCalls])
   
   // Debug: Log previews on mount to verify they're being passed correctly
   useEffect(() => {
@@ -251,20 +323,78 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
     console.log('[PlaygroundViewer] Define defaults:', defineDefaults)
   }, [previews, defineDefaults])
 
+  // Use saved previews as initial state, but allow updates for regeneration
+  const [previewMap, setPreviewMap] = useState<Record<string, string>>(previews || {})
   const [intentStates, setIntentStates] = useState<Record<string, { status: 'idle' | 'loading' | 'success' | 'error'; response?: string; error?: string }>>({})
   const [userDefines, setUserDefines] = useState<Record<string, string>>({})
+  const [isGenerating, setIsGenerating] = useState(false)
+
+  // Substitute definitions in prompts (similar to editor)
+  const substituteDefinitions = useCallback((
+    text: string,
+    userDefines: Record<string, string>,
+    defineNameMap: Record<string, string>,
+    defineDefaults: Record<string, string>,
+  ) => {
+    let result = text
+
+    // First, substitute user-defined values (they take priority)
+    result = result.replace(/\{([^}]+)\}/g, (match, varName) => {
+      // Find the define key for this variable name
+      const defineKey = Object.keys(defineNameMap).find(key => defineNameMap[key] === varName)
+      if (defineKey && userDefines[defineKey]) {
+        return userDefines[defineKey]
+      }
+      // Fallback to default value from agent definitions
+      if (defineDefaults[varName]) {
+        return defineDefaults[varName]
+      }
+      return match
+    })
+
+    return result
+  }, [])
 
   const handleIntentTrigger = useCallback(async (key: string, agent: string, prompt: string) => {
     setIntentStates(prev => ({ ...prev, [key]: { status: 'loading' } }))
     
     try {
+      // Substitute variables in prompt
+      const promptWithSubs = substituteDefinitions(prompt, userDefines, defineNameMap, defineDefaults)
+      
+      // Find agent definition for config
+      const aiDefinition = agentDefinitions.find(
+        def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.toLowerCase()
+      )
+      // Extract tool reference from AI definition params (e.g., "gpt-4o-mini,[SolanaMCP,SolanaBalanceTool]")
+      const toolRef = aiDefinition?.params?.match(/\[([^\]]+)\]/)?.[1]
+      const toolDefinition = toolRef
+        ? agentDefinitions.find(
+            def => def.kind.toLowerCase() === 'tool' && toolRef.includes(def.name)
+          )
+        : undefined
+      
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'text',
           bot: agent,
-          prompt: prompt,
+          prompt: promptWithSubs,
+          config: aiDefinition || toolDefinition
+            ? {
+                signature: aiDefinition?.params,
+                tool: toolDefinition
+                  ? {
+                      name: toolDefinition.name,
+                      params: toolDefinition.params,
+                    }
+                  : undefined,
+              }
+            : undefined,
+          ...(mcpDefinitions.length
+            ? { mcp: mcpDefinitions.map(def => ({ name: def.name, params: def.params })) }
+            : {}),
         }),
       })
 
@@ -289,14 +419,159 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
         } 
       }))
     }
-  }, [])
+  }, [userDefines, defineNameMap, defineDefaults, agentDefinitions, substituteDefinitions, mcpDefinitions])
 
   const handleDefineChange = useCallback((key: string, value: string) => {
-    setUserDefines(prev => ({ ...prev, [key]: value }))
-  }, [])
+    setUserDefines(prev => {
+      const updated = { ...prev, [key]: value }
+      // Get the variable name for this define key
+      const varName = defineNameMap[key]
+      if (varName) {
+        // Find all AI calls that use this variable and regenerate them
+        const varPattern = new RegExp(`\\{${escapeRegExp(varName)}\\}`)
+        const blocksToRegenerate: Array<{ blockIndex: number; callType: 'text' | 'image' | 'speech'; agent: string; prompt: string; key: string }> = []
+        
+        blocks.forEach((block, blockIndex) => {
+          if (parseAgentDefinitionBlock(block)) {
+            return
+          }
+          
+          // Check all AI call patterns
+          const allMatches = [
+            ...block.matchAll(aiTripleQuoteRegex),
+            ...block.matchAll(aiSingleRegex),
+            ...block.matchAll(aiMultilineRegex),
+            ...block.matchAll(aiImageRegex),
+            ...block.matchAll(aiSpeechRegex),
+          ]
+          
+          for (const match of allMatches) {
+            const [, agent, prompt] = match
+            if (varPattern.test(prompt)) {
+              const promptKey = normalizePrompt(prompt)
+              const callType = match[0].includes('~ai-image') ? 'image' : match[0].includes('~ai-speech') ? 'speech' : 'text'
+              const callKey = callType === 'image' 
+                ? `image:${blockIndex}:${agent.trim()}:${promptKey}`
+                : callType === 'speech'
+                ? `speech:${blockIndex}:${agent.trim()}:${promptKey}`
+                : `${blockIndex}:${agent.trim()}:${promptKey}`
+              
+              blocksToRegenerate.push({
+                blockIndex,
+                callType,
+                agent: agent.trim(),
+                prompt: prompt.trim(),
+                key: callKey,
+              })
+            }
+          }
+        })
+        
+        // Clear previews for affected calls and set "thinking..." placeholders
+        setPreviewMap(prevMap => {
+          const newMap = { ...prevMap }
+          blocksToRegenerate.forEach(({ key: callKey, agent }) => {
+            // Set thinking placeholder so UI shows loading state
+            newMap[callKey] = `🤖 ${agent}: thinking…`
+          })
+          return newMap
+        })
+        
+        // Regenerate affected calls
+        if (blocksToRegenerate.length > 0) {
+          setIsGenerating(true)
+          
+          // Generate all affected calls
+          Promise.all(blocksToRegenerate.map(async ({ callType, agent, prompt, key: callKey }) => {
+            try {
+              // Substitute variables in prompt
+              const promptWithSubs = substituteDefinitions(prompt, updated, defineNameMap, defineDefaults)
+              
+              // Find agent definition for config
+              const aiDefinition = agentDefinitions.find(
+                def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.toLowerCase()
+              )
+              // Extract tool reference from AI definition params (e.g., "gpt-4o-mini,[SolanaMCP,SolanaBalanceTool]")
+              const toolRef = aiDefinition?.params?.match(/\[([^\]]+)\]/)?.[1]
+              const toolDefinition = toolRef
+                ? agentDefinitions.find(
+                    def => def.kind.toLowerCase() === 'tool' && toolRef.includes(def.name)
+                  )
+                : undefined
+              
+              const response = await fetch('/api/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  type: callType,
+                  bot: agent,
+                  prompt: promptWithSubs,
+                  key: callKey,
+                  config: aiDefinition || toolDefinition
+                    ? {
+                        signature: aiDefinition?.params,
+                        tool: toolDefinition
+                          ? {
+                              name: toolDefinition.name,
+                              params: toolDefinition.params,
+                            }
+                          : undefined,
+                      }
+                    : undefined,
+                  ...(mcpDefinitions.length
+                    ? { mcp: mcpDefinitions.map(def => ({ name: def.name, params: def.params })) }
+                    : {}),
+                }),
+              })
+              
+              if (!response.ok) {
+                throw new Error(`Request failed with status ${response.status}`)
+              }
+              
+              const payload = await response.json()
+              
+              if (callType === 'image') {
+                const imageData = payload.image
+                if (imageData && typeof imageData === 'string') {
+                  setPreviewMap(prev => ({ ...prev, [callKey]: imageData }))
+                }
+              } else if (callType === 'speech') {
+                const audioData = payload.audio
+                if (audioData && typeof audioData === 'string') {
+                  setPreviewMap(prev => ({ ...prev, [callKey]: audioData }))
+                }
+              } else {
+                const content = payload.content
+                if (content && typeof content === 'string') {
+                  // Store content without bot name prefix (formatResponse will add it)
+                  setPreviewMap(prev => ({ ...prev, [callKey]: content.trim() }))
+                } else if (payload.error) {
+                  setPreviewMap(prev => ({ 
+                    ...prev, 
+                    [callKey]: `⚠️ ${agent}: ${payload.error}` 
+                  }))
+                }
+              }
+            } catch (error) {
+              console.error(`[PlaygroundViewer] Failed to regenerate ${callType} for ${callKey}:`, error)
+              setPreviewMap(prev => ({ 
+                ...prev, 
+                [callKey]: `⚠️ ${agent}: ${error instanceof Error ? error.message : 'Failed to generate'}` 
+              }))
+            }
+          })).finally(() => {
+            setIsGenerating(false)
+          })
+        }
+      }
+      return updated
+    })
+  }, [blocks, defineNameMap, agentDefinitions, substituteDefinitions, defineDefaults, mcpDefinitions])
 
   const processBlockWithDefines = (block: string, index: number, previews: Record<string, string>, userDefines: Record<string, string>, defineDefaults: Record<string, string>): string => {
-    let processed = processBlock(block, index, previews)
+    // Use previewMap (which includes regenerated previews) instead of just saved previews
+    const allPreviews = { ...previews, ...previewMap }
+    let processed = processBlock(block, index, allPreviews)
     
     // Process define inputs - replace with custom HTML element
     processed = processed.replace(defineRegex, (_, name: string, label: string) => {
@@ -332,16 +607,20 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
     return processed
   }
 
-  const blocks = splitMarkdownBlocks(markdown)
   // Process blocks with their original indices (don't filter before processing)
   // This ensures preview keys match what was saved (which includes agent definition blocks in the index)
-  const processedBlocks = blocks.map((block, originalIndex) => {
-    // Skip agent definition blocks in rendering, but use original index for preview lookup
-    if (parseAgentDefinitionBlock(block)) {
-      return ''
-    }
-    return processBlockWithDefines(block, originalIndex, previews || {}, userDefines, defineDefaults)
-  })
+  // Reuse the blocks from useMemo above
+  // Use useMemo to recompute when previewMap changes (for regeneration updates)
+  const processedBlocks = useMemo(() => {
+    return blocks.map((block, originalIndex) => {
+      // Skip agent definition blocks in rendering, but use original index for preview lookup
+      if (parseAgentDefinitionBlock(block)) {
+        return ''
+      }
+      return processBlockWithDefines(block, originalIndex, previews || {}, userDefines, defineDefaults)
+    })
+  }, [blocks, previews, previewMap, userDefines, defineDefaults])
+  
   const processedMarkdown = processedBlocks.filter(block => block.trim().length > 0).join('\n\n')
 
   return (
@@ -515,26 +794,56 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
           const name = decodeDataAttribute(nameAttr)
           const label = decodeDataAttribute(labelAttr)
           const defaultValue = decodeDataAttribute(defaultValueAttr)
-          const currentValue = userDefines[key] || decodeDataAttribute(currentValueAttr) || defaultValue
+          const savedValue = userDefines[key] || decodeDataAttribute(currentValueAttr) || defaultValue
 
-          const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-            handleDefineChange(key, e.target.value)
+          // Use a component with local state to handle typing without triggering regeneration
+          const DefineInputComponent = () => {
+            const [localValue, setLocalValue] = React.useState(savedValue)
+
+            // Update local value when saved value changes (from outside)
+            React.useEffect(() => {
+              setLocalValue(savedValue)
+            }, [savedValue])
+
+            const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+              setLocalValue(e.target.value)
+            }
+
+            const handleBlur = () => {
+              if (localValue !== savedValue) {
+                handleDefineChange(key, localValue)
+              }
+            }
+
+            const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                if (localValue !== savedValue) {
+                  handleDefineChange(key, localValue)
+                }
+                e.currentTarget.blur()
+              }
+            }
+
+            return (
+              <div className="my-3 flex flex-col gap-2">
+                <label className="text-sm font-semibold text-neutral-300">
+                  {label}
+                </label>
+                <input
+                  type="text"
+                  value={localValue}
+                  onChange={handleChange}
+                  onBlur={handleBlur}
+                  onKeyDown={handleKeyDown}
+                  placeholder={defaultValue || `Enter ${name}`}
+                  className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-2 font-mono text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-violet-400 focus:outline-none"
+                />
+              </div>
+            )
           }
 
-          return (
-            <div className="my-3 flex flex-col gap-2">
-              <label className="text-sm font-semibold text-neutral-300">
-                {label}
-              </label>
-              <input
-                type="text"
-                value={currentValue}
-                onChange={handleChange}
-                placeholder={defaultValue || `Enter ${name}`}
-                className="w-full rounded-lg border border-white/10 bg-black/40 px-4 py-2 font-mono text-sm text-neutral-100 placeholder:text-neutral-500 focus:border-violet-400 focus:outline-none"
-              />
-            </div>
-          )
+          return <DefineInputComponent />
         },
       } as Components}
     >
