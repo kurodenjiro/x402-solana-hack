@@ -39,7 +39,7 @@ export function ConnectWalletButton({ className }: ConnectWalletButtonProps) {
   }
 
   return (
-    <WalletMultiButton className={combinedClassName} title={label} aria-label={label} />
+    <WalletMultiButton className={combinedClassName} aria-label={label} />
   )
 }
 

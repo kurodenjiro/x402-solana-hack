@@ -3,24 +3,17 @@ import { generateText, experimental_generateImage as generateImage, type ToolSet
 import { createOpenAI } from '@ai-sdk/openai'
 import { experimental_createMCPClient } from '@ai-sdk/mcp'
 
-type ToolConfig = {
-  name: string
-  params: string
-}
-
 type GenerateRequest = {
   type?: 'text' | 'image'
   bot?: string
   prompt?: string
   config?: {
     signature?: string
-    tool?: ToolConfig
   }
   calls?: Array<{
     bot: string
     prompt: string
     signature?: string
-    tool?: ToolConfig
   }>
   mcp?: Array<{
     name: string
@@ -31,11 +24,6 @@ type GenerateRequest = {
 const openai = createOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 })
-
-const toToolIdentifier = (name: string, params: string, index: number) => {
-  const base = `${name}_${params}`.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `tool_${index}`
-  return base.toLowerCase()
-}
 
 const extractEndpoint = (params: string) => {
   if (!params) {
@@ -75,7 +63,6 @@ export async function POST(request: Request) {
     const config = call
       ? {
           signature: call.signature,
-          tool: call.tool,
         }
       : body.config
 
@@ -123,34 +110,12 @@ export async function POST(request: Request) {
       }
     }
 
-    const toolConfigs: ToolConfig[] = []
-    if (config?.tool) {
-      toolConfigs.push(config.tool)
-    }
-    if (body.config?.tool) {
-      toolConfigs.push(body.config.tool)
-    }
     const mcpDefinitions = body.mcp ?? []
-
-    const dedupedTools = new Map<string, { config: ToolConfig; index: number }>()
-    toolConfigs.forEach((toolConfig, index) => {
-      const key = `${toolConfig.name}|${toolConfig.params}`
-      if (!dedupedTools.has(key)) {
-        dedupedTools.set(key, { config: toolConfig, index })
-      }
-    })
-    const toolEntries = Array.from(dedupedTools.values()).map(({ config: toolConfig, index }) => ({
-      id: toToolIdentifier(toolConfig.name, toolConfig.params, index),
-      config: toolConfig,
-    }))
 
     const configurationLines: string[] = []
     if (config?.signature) {
       configurationLines.push(`Signature: ${config.signature}`)
     }
-    toolEntries.forEach(({ config: toolConfig, id }) => {
-      configurationLines.push(`Tool: ${toolConfig.name}(${toolConfig.params}) -> identifier "${id}"`)
-    })
 
     const mcpToolSets: ToolSet[] = []
     console.log('[API Generate] MCP definitions received:', mcpDefinitions)

@@ -92,7 +92,7 @@ export async function POST(req: Request) {
       title,
       summary,
       markdown,
-      previews: previews as Prisma.JsonValue,
+      previews: previews as Prisma.InputJsonValue,
       tags: [],
       price: null,
       network: 'solana-devnet',
@@ -105,7 +105,7 @@ export async function POST(req: Request) {
       title,
       summary,
       markdown,
-      previews: previews as Prisma.JsonValue,
+      previews: previews as Prisma.InputJsonValue,
       tags: [],
       price: null,
       network: 'solana-devnet',
@@ -121,7 +121,7 @@ export async function POST(req: Request) {
       where: { id: record.id },
       data: { resourcePath: desiredResourcePath },
     })
-    
+
     // Link any orphaned media assets (with null playgroundId) to this playground
     await prisma.mediaAsset.updateMany({
       where: {
@@ -132,7 +132,7 @@ export async function POST(req: Request) {
         playgroundId: updated.id,
       },
     })
-    
+
     return NextResponse.json(updated, { status: 201 })
   }
 

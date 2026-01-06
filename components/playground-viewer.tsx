@@ -366,13 +366,6 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
       const aiDefinition = agentDefinitions.find(
         def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.toLowerCase()
       )
-      // Extract tool reference from AI definition params (e.g., "gpt-4o-mini,[SolanaMCP,SolanaBalanceTool]")
-      const toolRef = aiDefinition?.params?.match(/\[([^\]]+)\]/)?.[1]
-      const toolDefinition = toolRef
-        ? agentDefinitions.find(
-            def => def.kind.toLowerCase() === 'tool' && toolRef.includes(def.name)
-          )
-        : undefined
       
       const response = await fetch('/api/generate', {
         method: 'POST',
@@ -381,15 +374,9 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
           type: 'text',
           bot: agent,
           prompt: promptWithSubs,
-          config: aiDefinition || toolDefinition
+          config: aiDefinition
             ? {
                 signature: aiDefinition?.params,
-                tool: toolDefinition
-                  ? {
-                      name: toolDefinition.name,
-                      params: toolDefinition.params,
-                    }
-                  : undefined,
               }
             : undefined,
           ...(mcpDefinitions.length
@@ -491,13 +478,6 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
               const aiDefinition = agentDefinitions.find(
                 def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.toLowerCase()
               )
-              // Extract tool reference from AI definition params (e.g., "gpt-4o-mini,[SolanaMCP,SolanaBalanceTool]")
-              const toolRef = aiDefinition?.params?.match(/\[([^\]]+)\]/)?.[1]
-              const toolDefinition = toolRef
-                ? agentDefinitions.find(
-                    def => def.kind.toLowerCase() === 'tool' && toolRef.includes(def.name)
-                  )
-                : undefined
               
               const response = await fetch('/api/generate', {
                 method: 'POST',
@@ -507,15 +487,9 @@ export const PlaygroundViewer = ({ markdown, previews = {} }: PlaygroundViewerPr
                   bot: agent,
                   prompt: promptWithSubs,
                   key: callKey,
-                  config: aiDefinition || toolDefinition
+                  config: aiDefinition
                     ? {
                         signature: aiDefinition?.params,
-                        tool: toolDefinition
-                          ? {
-                              name: toolDefinition.name,
-                              params: toolDefinition.params,
-                            }
-                          : undefined,
                       }
                     : undefined,
                   ...(mcpDefinitions.length

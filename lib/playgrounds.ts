@@ -1,6 +1,7 @@
 'use server'
 
 import matter from 'gray-matter'
+import { Prisma } from '@prisma/client'
 
 import { prisma } from '@/lib/prisma'
 
@@ -10,7 +11,7 @@ export type PlaygroundPayload = {
   title: string
   summary: string
   markdown: string
-  previews?: Record<string, string> | null
+  previews?: Prisma.JsonValue | null
   tags: string[]
   price?: string | null
   network: string

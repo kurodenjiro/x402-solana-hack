@@ -23,22 +23,21 @@ const staticRoutes: RoutesConfig = {
 const middlewareInstance =
   defaultReceiver && facilitatorUrl && cdpClientKey
     ? paymentMiddleware(
-        defaultReceiver,
-        staticRoutes,
-        { url: facilitatorUrl },
-        {
-          cdpClientKey,
-          appLogo: '/logo.svg',
-          appName: 'AI Playground x402',
-          sessionTokenEndpoint: '/api/x402/session-token',
-        },
-      )
+      defaultReceiver,
+      staticRoutes,
+      { url: facilitatorUrl as `${string}://${string}` },
+      {
+        cdpClientKey,
+        appLogo: '/logo.svg',
+        appName: 'AI Playground x402',
+        sessionTokenEndpoint: '/api/x402/session-token',
+      },
+    )
     : null
 
 export const middleware = (req: NextRequest) => {
   if (!middlewareInstance) return
-  const delegate = middlewareInstance as unknown as (request: NextRequest) => ReturnType<typeof middlewareInstance>
-  return delegate(req)
+  return middlewareInstance(req)
 }
 
 export const config = {

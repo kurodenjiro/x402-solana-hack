@@ -286,10 +286,7 @@ const starterBlocks = [
 @mcp[SolanaMCP](https://mcp.solana.com/mcp)
 **Description:** Solana MCP service for protocol metadata, pricing, and account enrichment.
 
-@tool[SolanaBalanceTool](address: String)
-**Description:** get solana balance wallet
-
-@ai[BalanceSummarizer](gpt-4o-mini,[SolanaMCP,SolanaBalanceTool])
+@ai[BalanceSummarizer](gpt-4o-mini,[SolanaMCP])
 **Description:** Summarize risks and opportunities across holdings.
 
 :::`,
@@ -331,10 +328,6 @@ type AiCall = {
   agent: string
   prompt: string
   signature?: string
-  tool?: {
-    name: string
-    params: string
-  }
   isImage?: boolean
   isSpeech?: boolean
 }
@@ -344,7 +337,6 @@ type AgentDefinition = {
   name: string
   params: string
   description?: string
-  tool?: string
 }
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -459,28 +451,12 @@ const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
 
     const [, kindRaw, nameRaw, paramsRaw] = headerMatch
     let description = ''
-    let toolRef: string | undefined
-
-    const inlineToolMatch = paramsRaw.match(/tool\s*:\s*\[([^\]]+)\]/i)
-    if (inlineToolMatch) {
-      toolRef = inlineToolMatch[1].trim()
-    }
 
     i += 1
     while (i < lines.length) {
       const nextLine = lines[i]
       if (!nextLine || nextLine.trim().startsWith('@')) {
         break
-      }
-
-      const trimmed = nextLine.trim()
-      if (!toolRef) {
-        const toolMatch = trimmed.match(/^tool\s*:\s*\[([^\]]+)\]/i)
-        if (toolMatch) {
-          toolRef = toolMatch[1].trim()
-          i += 1
-          continue
-        }
       }
 
       description += `${nextLine.trim()} `
@@ -494,7 +470,6 @@ const parseAgentDefinitionBlock = (block: string): AgentDefinition[] | null => {
       name: nameRaw.trim(),
       params: paramsRaw.trim(),
       description: description.length ? description : undefined,
-      tool: toolRef,
     })
   }
 
@@ -540,21 +515,12 @@ const extractAiCalls = (
     const aiDefinition = definitions.find(
       def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
     )
-    const toolDefinition = aiDefinition?.tool
-      ? definitions.find(def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase())
-      : undefined
 
     calls.push({
       key,
       agent: agent.trim(),
       prompt: promptWithDefinitions,
       signature: aiDefinition?.params,
-      tool: toolDefinition
-        ? {
-            name: toolDefinition.name,
-            params: toolDefinition.params,
-          }
-        : undefined,
     })
   })
 
@@ -576,21 +542,12 @@ const extractAiCalls = (
     const aiDefinition = definitions.find(
       def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
     )
-    const toolDefinition = aiDefinition?.tool
-      ? definitions.find(def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase())
-      : undefined
 
     calls.push({
       key,
       agent: agent.trim(),
       prompt: promptWithDefinitions,
       signature: aiDefinition?.params,
-      tool: toolDefinition
-        ? {
-            name: toolDefinition.name,
-            params: toolDefinition.params,
-          }
-        : undefined,
     })
   })
 
@@ -610,21 +567,12 @@ const extractAiCalls = (
     const aiDefinition = definitions.find(
       def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
     )
-    const toolDefinition = aiDefinition?.tool
-      ? definitions.find(def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase())
-      : undefined
 
     calls.push({
       key,
       agent: agent.trim(),
       prompt: promptWithDefinitions,
       signature: aiDefinition?.params,
-      tool: toolDefinition
-        ? {
-            name: toolDefinition.name,
-            params: toolDefinition.params,
-          }
-        : undefined,
     })
   })
 
@@ -1050,24 +998,12 @@ export const PlaygroundEditor = ({ initial, playgroundId, onChange }: Playground
       const aiDefinition = agentDefinitions.find(
         def => def.kind.toLowerCase() === 'ai' && def.name.toLowerCase() === agent.trim().toLowerCase(),
       )
-      const toolDefinition = aiDefinition?.tool
-        ? agentDefinitions.find(
-            def => def.kind.toLowerCase() === 'tool' && def.name.toLowerCase() === aiDefinition.tool?.toLowerCase(),
-          )
-        : undefined
 
-      const config =
-        aiDefinition || toolDefinition
-          ? {
-              signature: aiDefinition?.params,
-              tool: toolDefinition
-                ? {
-                    name: toolDefinition.name,
-                    params: toolDefinition.params,
-                  }
-                : undefined,
-            }
-          : undefined
+      const config = aiDefinition
+        ? {
+            signature: aiDefinition?.params,
+          }
+        : undefined
 
       const promptWithDefinitions = substituteDefinitions(prompt, agentDefinitions, userDefines, defineNameMap)
 
@@ -1459,13 +1395,11 @@ export const PlaygroundEditor = ({ initial, playgroundId, onChange }: Playground
               }
             }
           } else {
-            const config =
-              call.signature || call.tool
-                ? {
-                    signature: call.signature,
-                    tool: call.tool,
-                  }
-                : undefined
+            const config = call.signature
+              ? {
+                  signature: call.signature,
+                }
+              : undefined
 
             const response = await fetch('/api/generate', {
               method: 'POST',
