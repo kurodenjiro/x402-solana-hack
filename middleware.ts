@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server'
 import { paymentMiddleware, type Network, type RoutesConfig } from 'x402-next'
-import { Address } from 'viem'
-
+type Address = `0x${string}`
 const defaultReceiver = process.env.NEXT_PUBLIC_RECEIVER_ADDRESS as Address | undefined
 const facilitatorUrl = process.env.NEXT_PUBLIC_FACILITATOR_URL
 const cdpClientKey = process.env.NEXT_PUBLIC_CDP_CLIENT_KEY
@@ -37,10 +36,9 @@ const middlewareInstance =
 
 export const middleware = (req: NextRequest) => {
   if (!middlewareInstance) return
-  return middlewareInstance(req)
+  return middlewareInstance(req as any)
 }
 
 export const config = {
   matcher: ['/playgrounds/:path*'],
 }
-
